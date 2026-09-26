@@ -1,0 +1,354 @@
+# Golden cases for classify.Classify.
+# Columns: input<TAB>first_kind<TAB>expected<TAB>comment
+# first_kind is what zsh's `whence -w` prints for the first command word.
+# The test runs in a fake directory with these entries:
+#   configs  tmp/  main.go  go.mod  README.md  Makefile  docs/  Загрузки/  notes  a
+# Lines starting with '#' and blank lines are ignored.
+
+# --- Rule 1: empty input ---
+	none	cmd	empty line
+   	none	cmd	whitespace only
+
+# --- Rule 2: explicit prefix ---
+?rm everything in tmp except configs	none	prompt	prefix wins over a dangerous command
+? ls -la	command	prompt	prefix wins over a known command
+?	none	prompt	bare prefix
+?why is the build failing	none	prompt	prefix without space
+  ? what does this do	none	prompt	leading whitespace before prefix
+
+# --- AGENTS.md section 2: the canonical example ---
+rm everything in tmp except configs	command	ask	canonical: first word valid, rest is English
+rm everything in tmp except configs	alias	ask	canonical with rm aliased to rm -i
+
+# --- AGENTS.md section 4 examples ---
+gti status	none	ask	typo of git
+git status	command	cmd	plain command
+?explain git rebase	none	prompt	explicit prefix
+
+# --- Plain commands (rule 4, no signals) ---
+ls	command	cmd
+ls -la	command	cmd
+ls -la docs	command	cmd
+cd ..	builtin	cmd
+cd -	builtin	cmd
+cd docs	builtin	cmd
+cd Загрузки	builtin	cmd	existing non-ASCII directory
+pwd	builtin	cmd
+git log --oneline -n 20	command	cmd
+git checkout main	command	cmd
+git checkout -b feature/login	command	cmd
+git commit -m "fix the bug in all files"	command	cmd	quoted message is not analysed
+git commit -m 'why is this broken'	command	cmd	single-quoted message
+git commit -am wip	command	cmd
+git remote add origin git@github.com:x/y.git	command	cmd	three args but one is not word-like
+git rebase -i HEAD~3	command	cmd
+git diff HEAD --stat	command	cmd
+git stash pop	command	cmd
+git push origin main	command	cmd
+git pull --rebase	command	cmd
+git add .	command	cmd
+git add -p	command	cmd
+git branch -d old-feature	command	cmd
+git log --author=alice --since=2.weeks	command	cmd
+make	command	cmd
+make all	command	cmd	"all" is only a weak stop word
+make test	command	cmd
+make -j8 build	command	cmd
+make install PREFIX=/usr/local	command	cmd
+go test ./...	command	cmd
+go test -race ./...	command	cmd
+go build -o bin/ecdy ./cmd/ecdy	command	cmd
+go run ./cmd/ecdy classify --json -- 'rm everything'	command	cmd
+nix develop -c go test ./...	command	cmd	three word-like args is only weak
+nix build .#default	command	cmd
+nix flake update	command	cmd
+docker ps -a	command	cmd
+docker compose up -d	command	cmd	"up" is not a stop word
+docker run -it --rm ubuntu bash	command	cmd
+docker exec -it web sh	command	cmd
+docker logs -f --tail 100 web	command	cmd
+kubectl get pods -n kube-system	command	cmd
+kubectl describe pod web-7d9f	command	cmd
+systemctl --user restart opencode-web	command	cmd
+sudo systemctl restart nginx	command	cmd	sudo precommand
+sudo -u postgres psql	command	cmd	sudo with -u value
+sudo apt install vim git curl	command	cmd
+npm install	command	cmd
+npm run build	command	cmd
+npx -y @agentclientprotocol/claude-agent-acp	command	cmd
+cargo build --release	command	cmd
+python3 -m http.server 8000	command	cmd
+pip install -r requirements.txt	command	cmd
+cat README.md	command	cmd
+cat main.go | grep func	command	cmd	pipe
+cat main.go | grep -n func | head -5	command	cmd	longer pipe
+ps aux | grep nginx | awk '{print $2}'	command	cmd	command words after pipes are not args
+grep -rn TODO .	command	cmd
+rg -i "the quick brown fox"	command	cmd	quoted pattern
+find . -name '*.go' -type f	command	cmd
+find . -name '*.go' | xargs wc -l	command	cmd
+echo $HOME	builtin	cmd
+echo "hello world"	builtin	cmd
+echo hello world	builtin	cmd	two words
+print -l $path	builtin	cmd
+printf '%s\n' foo	builtin	cmd
+export EDITOR=nvim	builtin	cmd
+FOO=1 BAR=2 make test	command	cmd	assignments before the command
+FOO=1	none	cmd	assignment only
+FOO=bar	none	cmd	assignment only, kind none
+arr=(a b c)	none	cmd	array assignment
+LANG=C sort notes	command	cmd
+env -i PATH=/bin sh	command	cmd	env with assignment
+time make build	command	cmd	time is a precommand: the kind is that of make
+noglob curl http://example.com/?q=1	command	cmd	noglob precommand
+command -v git	builtin	cmd
+builtin cd docs	builtin	cmd
+exec zsh	builtin	cmd
+nohup ./server &	command	cmd
+./configure --prefix=/usr	command	cmd	relative path
+/usr/bin/env python3	command	cmd	absolute path
+~/bin/deploy staging	command	cmd	home path
+ll	alias	cmd	alias
+gst	alias	cmd	alias with no args
+mkcd newdir	function	cmd	user function
+vim main.go	command	cmd
+nvim +42 main.go	command	cmd
+less +F /var/log/syslog	command	cmd
+tail -f /var/log/syslog	command	cmd
+ssh orangepi	command	cmd
+ssh -t orangepi htop	command	cmd
+scp main.go orangepi:~/	command	cmd
+rsync -avz --delete src/ dst/	command	cmd
+curl -s https://example.com | jq .	command	cmd
+wget -qO- https://example.com	command	cmd
+tar -xzf archive.tar.gz	command	cmd
+tar czf backup.tgz docs	command	cmd
+unzip -o file.zip -d out	command	cmd
+chmod +x script.sh	command	cmd
+chmod 644 README.md	command	cmd
+chown user:group main.go	command	cmd
+ln -s ../main.go link	command	cmd
+cp main.go main.go.bak	command	cmd
+mv notes notes.old	command	cmd
+mkdir -p a/b/c	command	cmd
+touch newfile	command	cmd
+du -sh *	command	cmd
+df -h	command	cmd
+free -m	command	cmd
+top	command	cmd
+htop	command	cmd
+history | tail	builtin	cmd
+jobs -l	builtin	cmd
+fg %1	builtin	cmd
+kill -9 1234	builtin	cmd	dangerous but no signals
+kill %1	builtin	cmd
+man zshzle	command	cmd
+which git	builtin	cmd
+whence -w ls	builtin	cmd
+source ~/.zshrc	builtin	cmd
+. ./env.sh	builtin	cmd
+exit	builtin	cmd
+clear	command	cmd
+true	builtin	cmd
+[[ -f main.go ]] && echo yes	reserved	cmd	conditional
+test -d docs && cd docs	builtin	cmd
+ls > out.txt 2>&1	command	cmd	redirections
+make 2> errors.log	command	cmd	fd redirection
+cat <<EOF	command	cmd	heredoc start: zsh continues the input
+cat <<< "hello there"	command	cmd	here-string
+echo foo |	builtin	cmd	trailing pipe: zsh continues the input
+diff <(ls docs) <(ls tmp)	command	cmd	process substitution
+echo $(git rev-parse HEAD)	builtin	cmd	command substitution
+echo `date`	builtin	cmd	backticks
+ls *(.)	command	cmd	zsh glob qualifier
+print -l **/*.go(om[1,3])	builtin	cmd	zsh recursive glob with qualifiers
+echo ${(k)commands}	builtin	cmd	zsh parameter flags
+for f in *.go; do echo $f; done	reserved	cmd	for loop
+while true; do sleep 1; done	reserved	cmd	while loop
+if [[ -d docs ]]; then echo ok; fi	reserved	cmd	if statement
+{ echo a; echo b } > out	reserved	cmd	brace group
+(cd docs && make)	none	cmd	subshell
+repeat 3 echo hi	reserved	cmd	zsh repeat
+tmux attach -t main	command	cmd
+tmux new -s work	command	cmd
+gh pr checks --watch	command	cmd
+gh pr create --fill	command	cmd
+jq '.items[] | .name' data.json	command	cmd
+awk -F: '{print $1}' /etc/passwd	command	cmd
+sed -i 's/foo/bar/g' main.go	command	cmd
+sort -u notes | uniq -c	command	cmd
+xargs -n1 echo	command	cmd
+watch -n 1 date	command	cmd
+journalctl -u nginx -f	command	cmd
+ping -c 3 1.1.1.1	command	cmd
+ip addr show	command	cmd
+brew install ripgrep fd bat	command	cmd	three package names
+cat notes a	command	cmd	existing file named "a" is not a stop word
+ls the	command	ask	a strong stop word that is not a file is enough
+touch a	command	cmd	existing file "a"
+git log -- README.md	command	cmd
+cd Загрузки && ls	builtin	cmd	existing non-ASCII dir with a pipeline
+
+# --- Dangerous commands without signals (rule 5 needs a signal) ---
+rm -rf build	command	cmd
+rm main.go.bak	command	cmd
+sudo rm -rf /var/cache/foo	command	cmd
+dd if=/dev/zero of=disk.img bs=1M count=10	command	cmd
+mkfs.ext4 /dev/sdb1	command	cmd
+chmod -R 755 docs	command	cmd
+chown -R user:user docs	command	cmd
+git reset --hard HEAD~1	command	cmd
+git clean -fdx	command	cmd
+git push --force origin main	command	cmd	the word count alone does not make rm-class commands ask
+git push -f	command	cmd
+find . -name '*.tmp' -delete	command	cmd
+pkill -f server	command	cmd
+shutdown -h now	command	cmd
+reboot	command	cmd
+truncate -s 0 app.log	command	cmd
+
+# --- Dangerous commands with signals (rule 5) ---
+rm all the logs	command	ask
+rm -rf everything except configs	command	ask
+rm the old backups please	command	ask
+rm files older than a week	command	ask	"than" is a strong stop word
+rm a	command	cmd	existing file "a"
+rm tmp and docs	command	ask	weak stop word is enough for rm
+sudo rm everything in tmp	command	ask	sudo does not hide rm
+kill all the node processes	builtin	ask
+kill it	builtin	ask
+pkill whatever is using port 8080	command	ask
+dd the image onto my usb stick	command	ask
+chmod -R everything to be readable	command	ask
+chown -R me the whole docs folder	command	ask
+git reset --hard to the last commit	command	ask
+git clean up the repo	command	ask
+git push --force to fix the history	command	ask
+find all big files and -delete them	command	ask
+shutdown the server in an hour	command	ask
+reboot when the update is done	command	ask
+truncate the log file	command	ask
+mkfs the new disk with ext4	command	ask
+ls && rm everything in tmp	command	ask	dangerous command in a later segment
+cat notes | rm the old ones	command	ask	dangerous command after a pipe
+
+# --- Known first word with natural-language signals (rule 4 -> ask) ---
+make it faster	command	ask
+make the tests pass	command	ask
+find the biggest files in this repo	command	ask
+find where the config is loaded	command	ask
+git whats wrong with my repo's history	command	ask	contraction
+git why is my branch behind	command	ask
+git show me the last commit	command	ask
+ls what is in this folder	command	ask
+cat the readme and summarize it	command	ask
+echo this is a test	builtin	ask	echo is not special
+grep for todos in the codebase	command	ask
+docker why does my container keep dying	command	ask
+docker compose up doesn't work	command	ask	contraction
+kubectl get pods and tell me which are failing	command	ask
+go test fails, can you fix it	command	ask
+npm install is slow, why	command	ask
+test coverage is too low	builtin	ask
+cd to the project root	builtin	ask
+cd into docs and list everything	builtin	ask
+ls -la but only directories please	command	ask
+git log for the last week?	command	ask	trailing question mark
+git status?	command	ask	trailing question mark on a word
+ls мои документы	command	ask	non-ASCII words that are not files
+git покажи последний коммит	command	ask	Russian after a known command
+make сборку быстрее	command	ask	Russian
+cat notes и объясни	command	ask	Russian
+time to fix the build	none	prompt	time is a precommand, "to" is unknown
+if this works then great	reserved	ask	reserved word, incomplete syntax
+for every file in docs count the lines	reserved	ask	reserved word in English
+while you are at it fix the tests	reserved	ask
+sudo make me a sandwich	command	ask	precommand then English
+sudo tell me why nginx fails	none	prompt	precommand then unknown word
+env why is PATH wrong	command	ask
+man how do i use rsync	command	ask
+which one is faster	builtin	ask
+./deploy.sh to production please	command	ask	path command with English
+~/bin/backup everything now	command	ask
+apt install a b c d e f	command	ask	many word-like args add up
+
+# --- Rule 3: unknown first word -> prompt ---
+explain this error	none	prompt
+explain the difference between rebase and merge	none	prompt
+why is the build failing	none	prompt
+why?	none	prompt	trailing question mark does not make it a glob
+how do I undo the last commit	none	prompt
+what does this function do	none	prompt
+what's in this folder	none	prompt	contraction in first word
+fix the failing tests	none	prompt
+write a script that renames all jpgs	none	prompt
+refactor main.go into smaller functions	none	prompt
+summarize README.md	none	prompt
+review my last commit	none	prompt
+show me the diff	none	prompt
+help me write a Dockerfile	none	prompt
+hello	none	prompt
+hi there	none	prompt
+thanks	none	prompt
+please run the tests	none	prompt
+can you check the logs	none	prompt
+add a --verbose flag to classify	none	prompt
+create a new branch for the login feature	none	prompt
+почему не работает	none	prompt	Russian
+объясни эту ошибку	none	prompt	Russian
+сделай коммит с понятным сообщением	none	prompt	Russian
+как откатить последний коммит	none	prompt	Russian
+перезапусти nginx	none	prompt	Russian then a command name
+удали все временные файлы	none	prompt	Russian dangerous request is a prompt, never a command
+tell me a joke	none	prompt
+generate tests for internal/classify	none	prompt
+list all goroutines that leak	none	prompt
+implement the daemon	none	prompt
+debug why ecdy is slow	none	prompt
+lets go	none	prompt	starter word is never a typo
+the tests are failing	none	prompt	stop word first
+my build broke	none	prompt
+is docker running	none	prompt
+does this repo have tests	none	prompt
+ok	none	prompt
+yes	none	prompt
+foobarbaz	none	prompt	unknown word with no near command
+deploy to staging	none	prompt	unknown word that is not a typo
+
+# --- Rule 3: typos -> ask ---
+gti status	none	ask	transposition
+got status	none	ask	substitution
+gitt pull	none	ask	insertion
+sl	none	ask	two-letter transposition
+sl -la	none	ask	two-letter transposition with a flag
+cta README.md	none	ask	transposition with a file
+grpe -rn TODO .	none	ask	transposition
+gerp foo	none	ask	transposition
+mkae test	none	ask	transposition
+dokcer ps	none	ask	transposition
+docekr ps -a	none	ask	transposition
+kubeclt get pods	none	ask	transposition
+ssj orangepi	none	ask	substitution
+vmi main.go	none	ask	transposition
+nvmi main.go	none	ask	transposition
+sudp apt update	none	ask	substitution
+tial -f log	none	ask	transposition
+sudo gti push	none	ask	typo after a precommand
+gti whats wrong with my repo	none	prompt	typo-looking word but the rest is English
+gs	none	prompt	two letters without transposition
+kubectl get pods	none	cmd	known command name that is not installed
+
+# --- Paths and expansions as first word (rule 4 even if kind is none) ---
+./missing-script	none	cmd	path: the shell reports the error
+/nonexistent/bin/tool --help	none	cmd	absolute path
+$EDITOR main.go	none	cmd	expansion
+"$EDITOR" main.go	none	cmd	quoted expansion
+\rm main.go.bak	command	cmd	backslash bypasses aliases
+./missing-script why does it fail	none	ask	path with English
+
+# --- Parse errors and quoting ---
+echo "unterminated	builtin	cmd	unterminated quote: zsh continues the input
+git commit -m 'unterminated	command	cmd	unterminated quote in a command
+echo )	builtin	cmd	a stray parenthesis alone is only a weak signal
+echo hello )	builtin	cmd	weak
+echo it doesn't work	builtin	ask	contraction
