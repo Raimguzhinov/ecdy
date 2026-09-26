@@ -240,6 +240,8 @@ docs/adr/            architecture decisions (NNNN-title.md)
 docs/ROADMAP.md      milestones and their definitions of done
 docs/STATUS.md       current milestone, what's done, what's next
 flake.nix            devShell (go, gopls, golangci-lint, zsh, tmux, nodejs for npx agents) + package
+nix/zsh-versions.nix zsh releases for the zsh-matrix devShell (PTY tests on every supported zsh)
+.agents/skills/      skills for coding agents (.claude/skills is a symlink to it)
 ```
 
 User installation (like atuin/zoxide): `eval "$(ecdy init zsh)"` in `.zshrc`.
@@ -274,6 +276,14 @@ User installation (like atuin/zoxide): `eval "$(ecdy init zsh)"` in `.zshrc`.
   doing anything that executes commands without confirmation; changing section 2.
 - **Work milestone by milestone** as described in [docs/ROADMAP.md](docs/ROADMAP.md): one branch and one PR per milestone.
 - **Update `docs/STATUS.md`** at the end of every session: what's done, what's broken, the next step.
+- **Trust a test only after seeing it fail.** Revert the fix or break the code locally, watch the new
+  test go red, restore. Every timeout or deadline gets a test with the extreme value (`0`, a hung child).
+- **Shell integration is tested on two axes**: zsh releases (`nix develop .#zsh-matrix`: 5.8.1 — the
+  oldest supported, 5.9, the latest) and a distribution build of zsh (Ubuntu's, in the CI `go` job).
+  They catch different bugs. PTY tests also run with `-race -count=20` before a PR.
+- **Reproduce a CI failure before fixing it**, and do not guess from the log alone.
+- **Skills for coding agents** live in `.agents/skills/` (`.claude/skills` is a symlink to it):
+  `ci-repro` reproduces the CI jobs locally, `milestone-finish` is the checklist before a PR.
 - Everything in the repository is in English: code, comments, user docs and this file.
 - Go: no global state, `context.Context` as the first argument, wrap errors with `%w`,
   no `panic` outside `main`. No `golangci-lint` exclusions without a "why" comment.
@@ -288,6 +298,8 @@ go test ./internal/classify -run TestGolden  # classifier table
 go test ./internal/classify -bench . -benchmem
 go test ./internal/classify -fuzz FuzzClassify -fuzztime 60s
 golangci-lint run
+nix develop .#zsh-matrix -c go test ./shell/ # PTY tests on zsh 5.8.1, 5.9 and the latest
+.agents/skills/ci-repro/ubuntu.sh            # the CI go job in Docker (Ubuntu's zsh)
 go run ./cmd/ecdy classify --json --first-kind=command -- 'rm everything in tmp except configs'
 zsh -f -c 'eval "$(go run ./cmd/ecdy init zsh)"; ...'   # manual plugin check
 ```

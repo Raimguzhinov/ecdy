@@ -43,7 +43,7 @@
 - devShell exports `ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING` / `ECDY_TEST_ZSH_AUTOSUGGESTIONS`; the CI
   `go` job installs zsh and both plugins from apt. `vendorHash` updated.
 
-### Follow-up: supported zsh versions (branch `zsh-matrix`)
+### Follow-up: supported zsh versions and agent tooling (branch `chore/dev-tooling`)
 
 - Minimum supported zsh is 5.8 (Ubuntu 22.04, Debian 11, RHEL 9); the plugin checks it with
   `is-at-least` and does not load on older versions (`TestMinVersion`).
@@ -54,6 +54,12 @@
 - Finding: upstream 5.8.1 and 5.9 do **not** reproduce the blank-prompt bug fixed above (the
   pre-fix plugin passes on them); it needs Ubuntu's zsh 5.9 build. So the version matrix and the
   distribution build catch different things, and both stay in CI.
+- It is also a race: in Docker with Ubuntu's zsh it did not show up in 50 runs on 2 idle CPUs,
+  but did with `CPUS=1`. `TestFailOpen/deadline` now runs 20 lines and fails on the pre-fix
+  plugin within 10 runs there.
+- Agent skills in `.agents/skills/` (`.claude/skills` → symlink): `ci-repro` (both CI jobs
+  locally; `ubuntu.sh` runs the `go` job in Docker) and `milestone-finish` (the checklist before
+  a PR). AGENTS.md section 8 gained the testing rules learned in M2.
 
 ### Verified locally (2026-09-27)
 
