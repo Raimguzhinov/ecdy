@@ -255,24 +255,26 @@ func testFailOpen(t *testing.T, zsh string) {
 	}
 	plugin := sourceFile(t)
 	tests := []struct {
-		name string
-		opts zshOpts
+		name  string
+		opts  zshOpts
+		lines int // builtin command lines after the first one
 	}{
 		// No ecdy in $PATH: the plugin is sourced directly.
-		{"missing", zshOpts{load: "source " + plugin, path: "/usr/bin:/bin:" + filepath.Dir(zsh)}},
-		{"crash", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "crash")}},
-		{"slow", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "slow") + " ECDY_CLASSIFY_TIMEOUT=0.2"}},
-		{"garbage", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "garbage")}},
+		{"missing", zshOpts{load: "source " + plugin, path: "/usr/bin:/bin:" + filepath.Dir(zsh)}, 0},
+		{"crash", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "crash")}, 0},
+		{"slow", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "slow") + " ECDY_CLASSIFY_TIMEOUT=0.2"}, 0},
+		{"garbage", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "garbage")}, 0},
 		// The deadline passes before the classifier even reports its pid.
 		// It must still be stopped: a child exiting while zsh 5.9 draws
 		// the next prompt left that prompt blank.
-		{"deadline", zshOpts{after: "ECDY_CLASSIFY_TIMEOUT=0"}},
+		// It is a race, so give it many lines.
+		{"deadline", zshOpts{after: "ECDY_CLASSIFY_TIMEOUT=0"}, 20},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			z := startZsh(t, zsh, tt.opts)
 			z.Run("explain this error", "command not found: explain")
-			for range 3 {
+			for range max(tt.lines, 3) {
 				z.Run(`print -r -- still-$((6*7))`, "still-42")
 			}
 		})
