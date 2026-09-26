@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -20,6 +21,7 @@ func newClassifyCmd() *cobra.Command {
 		firstKind string
 		cwd       string
 		asJSON    bool
+		format    string
 	)
 	cmd := &cobra.Command{
 		Use:   "classify [flags] -- LINE",
@@ -31,6 +33,14 @@ func newClassifyCmd() *cobra.Command {
 			"a list of zsh builtins and reserved words and from $PATH.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			switch format {
+			case "text", "json", "nul":
+			default:
+				return fmt.Errorf("--format: unknown format %q (want text, json or nul)", format)
+			}
+			if asJSON {
+				format = "json"
+			}
 			if shell != "zsh" {
 				return fmt.Errorf("unsupported shell %q (only zsh is supported)", shell)
 			}
@@ -57,19 +67,7 @@ func newClassifyCmd() *cobra.Command {
 				FirstKind: kind,
 				FS:        os.DirFS(cwd).(fs.StatFS),
 			})
-			out := cmd.OutOrStdout()
-			if asJSON {
-				enc := json.NewEncoder(out)
-				enc.SetEscapeHTML(false)
-				if err := enc.Encode(res); err != nil {
-					return fmt.Errorf("write result: %w", err)
-				}
-				return nil
-			}
-			if _, err := fmt.Fprintln(out, res.Verdict); err != nil {
-				return fmt.Errorf("write result: %w", err)
-			}
-			return nil
+			return writeResult(cmd.OutOrStdout(), format, res)
 		},
 	}
 	f := cmd.Flags()
@@ -77,8 +75,37 @@ func newClassifyCmd() *cobra.Command {
 	f.StringVar(&firstKind, "first-kind", "auto",
 		"kind of the first word as printed by `whence -w`: alias, function, builtin, command, reserved, hashed, none, or auto")
 	f.StringVar(&cwd, "cwd", "", "directory used to tell file names from words (default: current directory)")
-	f.BoolVar(&asJSON, "json", false, "print the verdict, reason and signals as JSON")
+	f.BoolVar(&asJSON, "json", false, "same as --format=json")
+	f.StringVar(&format, "format", "text",
+		"output format: text (the verdict), json (verdict, reason, signals), or nul (for the shell plugin)")
 	return cmd
+}
+
+// writeResult prints res in the given format. The nul format is what the
+// shell plugin reads: five NUL-terminated fields, in this order: verdict,
+// prompt, suggestion, correction, dangerous ("1" or "0"). NUL is the one byte
+// that cannot occur in a shell line, so the fields need no escaping.
+func writeResult(w io.Writer, format string, res classify.Result) error {
+	var err error
+	switch format {
+	case "json":
+		enc := json.NewEncoder(w)
+		enc.SetEscapeHTML(false)
+		err = enc.Encode(res)
+	case "nul":
+		dangerous := "0"
+		if res.Dangerous {
+			dangerous = "1"
+		}
+		fields := []string{res.Verdict.String(), res.Prompt, res.Suggestion, res.Correction, dangerous}
+		_, err = io.WriteString(w, strings.Join(fields, "\x00")+"\x00")
+	default:
+		_, err = fmt.Fprintln(w, res.Verdict)
+	}
+	if err != nil {
+		return fmt.Errorf("write result: %w", err)
+	}
+	return nil
 }
 
 // zshReserved and zshBuiltins back --first-kind=auto, which exists for manual
