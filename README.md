@@ -34,7 +34,8 @@ go run ./cmd/ecdy version
 nix build && ./result/bin/ecdy version
 ```
 
-Progress is tracked in [docs/STATUS.md](docs/STATUS.md).
+Design, invariants and contribution rules (for humans and coding agents alike) are in [AGENTS.md](AGENTS.md).
+The plan is in [docs/ROADMAP.md](docs/ROADMAP.md), progress in [docs/STATUS.md](docs/STATUS.md).
 
 ## License
 

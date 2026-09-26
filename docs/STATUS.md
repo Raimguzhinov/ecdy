@@ -31,4 +31,6 @@
 
 ## Next: M1 — Classifier
 
+See [ROADMAP.md](ROADMAP.md).
+
 `internal/classify` + golden table (≥ 200 cases) + fuzz + benchmark + `ecdy classify`.
