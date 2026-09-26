@@ -1,0 +1,7 @@
+/ecdy
+/result
+/result-*
+/dist/
+*.test
+*.out
+/.direnv/
