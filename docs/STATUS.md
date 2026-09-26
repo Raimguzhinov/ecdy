@@ -24,7 +24,10 @@
   - Fail-open: `ecdy` not in `$PATH` (checked with `whence -p`, no fork), non-zero exit, wrong
     number of fields, or no answer within `ECDY_CLASSIFY_TIMEOUT` (default 0.5 s; the classifier
     runs in a process substitution that reports its pid, and is killed on timeout) → vanilla
-    `accept-line`.
+    `accept-line`. The pid is read with its own 1 s deadline and the killed classifier is waited
+    for (up to 0.2 s, `kill -0` + `zselect`): on zsh 5.9 (Ubuntu) a classifier child exiting while
+    ZLE drew the next prompt left the prompt blank until a key was pressed. This was the first
+    CI failure of M2; `TestFailOpen/deadline` covers it.
   - If `accept-line` was already a user widget (zsh-syntax-highlighting, zsh-autosuggestions, …)
     it is kept as `_ecdy_orig_accept_line` and called instead of `.accept-line`.
 - `ecdy classify --format=nul`: five NUL-terminated fields (verdict, prompt, suggestion,
@@ -43,6 +46,8 @@
 ### Verified locally (2026-09-27)
 
 - `nix develop -c go test -race ./...` — green; `go test -race -count=20 ./shell/` — green;
+  also `go test -race -count=10 ./shell/` in Docker `ubuntu:24.04` (zsh 5.9, 2 CPUs, as a
+  non-root user, apt zsh plugins) — green;
   `golangci-lint run` — 0 issues; `nix build`, `nix flake check` — ok.
 - Plugin overhead per Enter (`_ecdy_first_kind` + fork/exec of `ecdy classify`), 200 runs:
   p50 4.5 ms, p99 5.2 ms.
