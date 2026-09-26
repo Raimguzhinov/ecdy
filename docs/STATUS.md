@@ -18,9 +18,9 @@
 - `nix develop -c golangci-lint run` — 0 issues.
 - `nix flake check`, `nix build && ./result/bin/ecdy version` — ok.
 
-### Open for M0 DoD
+### CI
 
-- CI green on GitHub: the repository is not pushed yet.
+- PR #1: `go` and `nix` jobs green (run 36271433540). M0 DoD met.
 
 ### Notes
 
