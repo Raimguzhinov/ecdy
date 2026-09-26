@@ -16,8 +16,13 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
+      - name: install zsh and plugins for the PTY tests
+        run: sudo apt-get update && sudo apt-get install -y zsh zsh-syntax-highlighting zsh-autosuggestions
       - run: go vet ./...
       - run: go test -race ./...
+        env:
+          ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING: /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+          ECDY_TEST_ZSH_AUTOSUGGESTIONS: /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
       - name: classify cold-start budget (p99 < 15 ms)
         run: go test ./cmd/ecdy -run TestClassifyColdStart -v
         env:
