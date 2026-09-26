@@ -79,8 +79,34 @@ func TestClassifyCmdJSON(t *testing.T) {
 	}
 }
 
+func TestClassifyCmdNul(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--format=nul", "--first-kind=command", "--", "git status"}, "cmd\x00\x00\x00\x00" + "0\x00"},
+		{[]string{"--format=nul", "--first-kind=none", "--", "? why\tnot"}, "prompt\x00why\tnot\x00\x00\x00" + "0\x00"},
+		{[]string{"--format=nul", "--first-kind=none", "--", "gti status"}, "ask\x00gti status\x00git\x00git status\x00" + "0\x00"},
+		{
+			[]string{"--format=nul", "--first-kind=command", "--", "rm everything in tmp except configs"},
+			"ask\x00rm everything in tmp except configs\x00\x00\x00" + "1\x00",
+		},
+	}
+	for _, tt := range tests {
+		got, err := runClassify(t, tt.args...)
+		if err != nil {
+			t.Errorf("classify %q: %v", tt.args, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("classify %q = %q, want %q", tt.args, got, tt.want)
+		}
+	}
+}
+
 func TestClassifyCmdErrors(t *testing.T) {
 	for _, args := range [][]string{
+		{"--format=yaml", "--", "ls"},
 		{"--shell=bash", "--", "ls"},
 		{"--first-kind=file", "--", "ls"},
 	} {

@@ -21,7 +21,7 @@
           pname = "ecdy";
           inherit version;
           src = self;
-          vendorHash = "sha256-G//FYGc6euXh0ztYAGxHJuJ+F7k5HiC+Hh/WDYiLBLE=";
+          vendorHash = "sha256-RnLGn1LE4H5MYz+2Rvl3r5veXrUcasS73fQW1yNVNrQ=";
           subPackages = [ "cmd/ecdy" ];
           env.CGO_ENABLED = 0;
           ldflags = [
@@ -48,6 +48,9 @@
             tmux
             nodejs # npx-launched ACP agents (claude-agent-acp, codex-acp)
           ];
+          # Third-party zsh plugins loaded by the coexistence PTY tests.
+          ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING = "${pkgs.zsh-syntax-highlighting}/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh";
+          ECDY_TEST_ZSH_AUTOSUGGESTIONS = "${pkgs.zsh-autosuggestions}/share/zsh-autosuggestions/zsh-autosuggestions.zsh";
           # A GOROOT inherited from the user's environment would pair this
           # shell's go binary with a different standard library.
           shellHook = ''

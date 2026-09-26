@@ -11,7 +11,7 @@ milestone's DoD is met and [STATUS.md](STATUS.md) is updated. Design context: [A
 (`--first-kind`, `--json` prints verdict and reason).
 *DoD:* the table passes; p99 < 15 ms in the cold-start benchmark; every example from AGENTS.md sections 2 and 4 is in the table.
 
-**M2 — zsh integration.** `shell/zsh/ecdy.plugin.zsh`, `ecdy init zsh`, accept-line wrapper, `?` prefix, Alt+Enter,
+**M2 — zsh integration.** ✅ `shell/zsh/ecdy.plugin.zsh`, `ecdy init zsh`, accept-line wrapper, `?` prefix, Alt+Enter,
 `zshaddhistory`, the `Ask` dialog, fail-open when the binary is missing. At this stage `ecdy ask` is a stub that prints the prompt.
 *DoD:* PTY tests (`zsh -f` + plugin) for: a command, a prompt, Ask, fail-open, history recording, coexistence with
 zsh-syntax-highlighting and zsh-autosuggestions (loaded in the test from vendored copies or from nix).
