@@ -1,45 +1,62 @@
 # Status
 
-## Current milestone: M1 — Classifier
+## Current milestone: M2 — zsh integration
 
 ### Done
 
-- `internal/classify`: pure `Classify(Input) Result` implementing the rule cascade from AGENTS.md
-  section 4 (empty line, `?` prefix, unknown first word → typo `Ask` or `Prompt`, known first word →
-  weighted natural-language signals, dangerous commands). Scoring and thresholds are in
-  [ADR 0001](adr/0001-classifier-signal-scoring.md).
-  - Own lightweight lexer for command positions / arguments / quoting; `mvdan.cc/sh/v3/syntax`
-    (`LangZsh`, experimental upstream) only for the "does it parse" signal.
-  - File-existence checks go through an injected `fs.StatFS`, at most 16 `Stat` calls per line.
-  - `Result` carries `reason`, `score`, `signals`, `prompt`, typo `suggestion`/`correction` and a
-    `dangerous` flag (the Ask dialog in M2 must default to the agent).
-  - `classify.FirstWord` skips assignments and precommand modifiers (`sudo -u x`, `env -i`, `time`, …);
-    the zsh plugin must skip the same words (`precommands` in `internal/classify/words.go`).
-- Golden table `internal/classify/testdata/cases.tsv`: 324 cases, including every example from
-  AGENTS.md sections 2 and 4, Russian, typos, pipes, heredocs, `sudo`, assignments, zsh syntax,
-  dangerous commands with and without signals.
-- Tests: golden, result details, "known first word is never `Prompt`" property, dangerous-command
-  table, lexer, OSA distance; `FuzzClassify`; `BenchmarkClassify` (~5 µs/op in-process).
-- `ecdy classify [--shell=zsh] [--first-kind=KIND|auto] [--cwd DIR] [--json] -- LINE`.
-  `auto` (the default, for manual use) guesses the kind from zsh builtin/reserved lists and `$PATH`.
-- Cold-start measurement: `ECDY_COLDSTART=1 go test ./cmd/ecdy -run ColdStart -v` (opt-in test
-  with a hard p99 < 15 ms check, also run in CI) and `BenchmarkClassifyColdStart`.
-- CI: cold-start step and a 30 s fuzz run added to the `go` job. `vendorHash` updated.
+- `shell/zsh/ecdy.plugin.zsh`, embedded by package `shell` and printed by `ecdy init zsh`
+  (`eval "$(ecdy init zsh)"`); can also be sourced directly.
+  - `accept-line` wrapper. Classifies only fresh top-level lines (`CONTEXT=start`, empty
+    `PREBUFFER`): continuation lines, `vared` and `select` are accepted untouched.
+  - `_ecdy_first_kind` computes the kind of the first word without forking: skips assignments,
+    precommand modifiers (with the same option table as `internal/classify/words.go`) and
+    redirections, then checks `$aliases`/`$galiases`, `$reswords`, `$functions`, `$builtins`,
+    `whence -p`. `TestFirstKind` checks it against `classify.FirstWord`.
+  - `prompt` → the buffer becomes `ecdy ask -- '<prompt>'` (`(qq)` quoting: no history expansion,
+    no globbing) and is accepted through the previous `accept-line`.
+  - `ask` → one-key dialog under the line (`zle -M` + `read -k 1`): Enter → agent (default),
+    `r` run, `e` edit (keep the buffer), Esc/other → drop the line (`send-break`), and `f` runs
+    the typo correction (not in AGENTS.md's sketch; shown only when the classifier has one).
+  - Alt+Enter (`^[^M`, emacs + viins) → run as a command, no classification.
+  - History: `zshaddhistory` returns 1 for the rewritten line; the original line is added with
+    `print -s` from `precmd`, because a line rejected by `zshaddhistory` "lingers" and Up would
+    recall `ecdy ask -- ...` otherwise.
+  - Fail-open: `ecdy` not in `$PATH` (checked with `whence -p`, no fork), non-zero exit, wrong
+    number of fields, or no answer within `ECDY_CLASSIFY_TIMEOUT` (default 0.5 s; the classifier
+    runs in a process substitution that reports its pid, and is killed on timeout) → vanilla
+    `accept-line`.
+  - If `accept-line` was already a user widget (zsh-syntax-highlighting, zsh-autosuggestions, …)
+    it is kept as `_ecdy_orig_accept_line` and called instead of `.accept-line`.
+- `ecdy classify --format=nul`: five NUL-terminated fields (verdict, prompt, suggestion,
+  correction, dangerous) for the plugin; `--format=text|json`, `--json` kept.
+- `ecdy ask -- PROMPT`: stub that prints `ecdy ask (no agent yet): PROMPT`.
+- `internal/testutil`: `Term`, a PTY driver (`github.com/creack/pty`) with `Send`/`Expect`.
+- PTY tests in `shell/zsh_test.go` (`zsh -f -i`, plugin loaded via `eval "$(ecdy init zsh)"`):
+  command, prompt (incl. `$`, quotes, globs, `?` prefix), Alt+Enter, Ask dialog (Enter / e / Esc /
+  r on `rm everything in tmp except configs` with a real `configs` file), typo dialog (f / Enter),
+  fail-open (binary missing, crashing, hanging, printing garbage), history (in memory, `$HISTFILE`,
+  Up right after a prompt), coexistence with zsh-syntax-highlighting 0.8.0 and
+  zsh-autosuggestions 0.7.1 loaded before and after ecdy.
+- devShell exports `ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING` / `ECDY_TEST_ZSH_AUTOSUGGESTIONS`; the CI
+  `go` job installs zsh and both plugins from apt. `vendorHash` updated.
 
 ### Verified locally (2026-09-27)
 
-- `nix develop -c go test -race ./...` — green; `golangci-lint run` — 0 issues.
-- Cold start, 300 execs of the built binary: p50 3.5 ms, p99 5.0 ms (budget 15 ms).
-- `go test ./internal/classify -fuzz FuzzClassify -fuzztime 60s` — no failures.
-- `nix build`, `nix flake check` — ok.
+- `nix develop -c go test -race ./...` — green; `go test -race -count=20 ./shell/` — green;
+  `golangci-lint run` — 0 issues; `nix build`, `nix flake check` — ok.
+- Plugin overhead per Enter (`_ecdy_first_kind` + fork/exec of `ecdy classify`), 200 runs:
+  p50 4.5 ms, p99 5.2 ms.
 
 ### Known limitations
 
-- Typo candidates are a built-in list (~150 commands) plus `Config.ExtraCommands`; the shell's
-  own command table is not used yet (see ADR 0001, consequences).
-- Unquoted English after a harmless known command (`echo this is a test`) is `Ask`, by design.
-- `Config` is not loaded from `config.toml` yet (no config package until it is needed).
+- After a prompt, the scrollback shows the rewritten `ecdy ask -- '...'` line instead of what was
+  typed (the buffer is redrawn before it runs). UX, M7.
+- Other tools that record commands in `preexec` (e.g. atuin) see `ecdy ask -- ...`; not tested
+  with zsh-vi-mode, fzf-tab and atuin yet (AGENTS.md section 3 lists them).
+- `ECDY_SESSION` is not exported yet (M4).
+- `TestFirstKind` uses `/usr/bin:/bin` as `$PATH`, so it expects `ls` and `/bin/sh` there.
 
-## Next: M2 — zsh integration
+## Next: M3 — ACP one-shot
 
-See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m2-zsh`.
+See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m3-acp`.
+First task: choose the ACP Go SDK and record it in ADR 0002 (AGENTS.md section 5).
