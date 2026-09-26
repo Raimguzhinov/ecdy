@@ -24,6 +24,7 @@
 # https://zsh.sourceforge.io/Doc/Release/Zsh-Modules.html
 zmodload zsh/system 2>/dev/null
 zmodload zsh/parameter 2>/dev/null
+zmodload zsh/zselect 2>/dev/null
 
 typeset -g _ECDY_ORIG=''      # the line the user typed, for zshaddhistory
 typeset -g _ECDY_REWRITTEN='' # what accept-line actually ran instead
@@ -102,16 +103,32 @@ _ecdy_classify() {
     print -rn -- "${sysparams[pid]:-}"$'\0'
     exec command $bin classify --shell=zsh --format=nul --first-kind=$kind -- $1 2>/dev/null
   ) || return 1
-  IFS= read -r -d '' -t $timeout -u $fd pid
+  # The pid comes before ecdy starts, so it gets a fixed deadline of its own:
+  # without it a timed-out classifier could not be stopped.
+  IFS= read -r -d '' -t 1 -u $fd pid
   while IFS= read -r -d '' -t $timeout -u $fd field; do
     fields+=("$field")
   done
   exec {fd}<&-
   if (( $#fields != 5 )); then
-    [[ $pid == <-> ]] && kill $pid 2>/dev/null
+    _ecdy_stop $pid
     return 1
   fi
   reply=("${fields[@]}")
+}
+
+# _ecdy_stop PID — kill a classifier that missed its deadline and wait (up to
+# 0.2 s) until it is gone. `wait` does not work for process substitutions, and
+# a child that exits later, while ZLE draws the next prompt, can leave that
+# prompt blank until a key is pressed (seen with zsh 5.9).
+_ecdy_stop() {
+  [[ $1 == <-> ]] || return 0
+  kill $1 2>/dev/null || return 0
+  integer i
+  for (( i = 0; i < 20; i++ )); do
+    kill -0 $1 2>/dev/null || return 0
+    zselect -t 1 2>/dev/null || return 0 # 10 ms; no zsh/zselect: don't spin
+  done
 }
 
 # Replace the buffer with a call to `ecdy ask` and remember the original line

@@ -255,12 +255,18 @@ func TestFailOpen(t *testing.T) {
 		{"crash", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "crash")}},
 		{"slow", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "slow") + " ECDY_CLASSIFY_TIMEOUT=0.2"}},
 		{"garbage", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "garbage")}},
+		// The deadline passes before the classifier even reports its pid.
+		// It must still be stopped: a child exiting while zsh 5.9 draws
+		// the next prompt left that prompt blank.
+		{"deadline", zshOpts{after: "ECDY_CLASSIFY_TIMEOUT=0"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			z := startZsh(t, tt.opts)
 			z.Run("explain this error", "command not found: explain")
-			z.Run(`print -r -- still-$((6*7))`, "still-42")
+			for range 3 {
+				z.Run(`print -r -- still-$((6*7))`, "still-42")
+			}
 		})
 	}
 }
