@@ -7,7 +7,7 @@ milestone's DoD is met and [STATUS.md](STATUS.md) is updated. Design context: [A
 `golangci-lint`, `go vet`), LICENSE (Apache-2.0), README stub.
 *DoD:* `nix develop -c go test ./...` green, CI green.
 
-**M1 — Classifier.** `internal/classify` + golden table ≥ 200 cases + fuzz + benchmark + CLI `ecdy classify`
+**M1 — Classifier.** ✅ `internal/classify` + golden table ≥ 200 cases + fuzz + benchmark + CLI `ecdy classify`
 (`--first-kind`, `--json` prints verdict and reason).
 *DoD:* the table passes; p99 < 15 ms in the cold-start benchmark; every example from AGENTS.md sections 2 and 4 is in the table.
 
