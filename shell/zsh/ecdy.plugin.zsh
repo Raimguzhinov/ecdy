@@ -11,12 +11,16 @@
 #
 # Fail-open (AGENTS.md, invariant 2): if the binary is missing, crashes, prints
 # garbage or misses the deadline, the line is accepted exactly like vanilla zsh.
+# Requires zsh 5.8 or newer; on older versions the plugin does not load.
 #
 # Settings (set before loading):
 #   ECDY_BIN               ecdy executable (default: `ecdy` from $PATH)
 #   ECDY_CLASSIFY_TIMEOUT  classification deadline in seconds (default: 0.5)
 
 [[ -o interactive ]] || return 0
+# Oldest supported zsh; on older ones Enter stays vanilla (fail-open).
+autoload -Uz is-at-least
+is-at-least 5.8 || return 0
 (( ${+functions[_ecdy_accept_line]} )) && return 0 # already loaded
 
 # $sysparams[pid] (the pid of a subshell) lets us kill a classifier that

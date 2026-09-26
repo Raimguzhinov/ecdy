@@ -38,26 +38,41 @@
         };
       });
 
-      devShells = forAllSystems (pkgs: {
-        default = pkgs.mkShell {
-          packages = with pkgs; [
-            go
-            gopls
-            golangci-lint
-            zsh
-            tmux
-            nodejs # npx-launched ACP agents (claude-agent-acp, codex-acp)
-          ];
-          # Third-party zsh plugins loaded by the coexistence PTY tests.
-          ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING = "${pkgs.zsh-syntax-highlighting}/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh";
-          ECDY_TEST_ZSH_AUTOSUGGESTIONS = "${pkgs.zsh-autosuggestions}/share/zsh-autosuggestions/zsh-autosuggestions.zsh";
-          # A GOROOT inherited from the user's environment would pair this
-          # shell's go binary with a different standard library.
-          shellHook = ''
-            unset GOROOT
-          '';
-        };
-      });
+      devShells = forAllSystems (
+        pkgs:
+        let
+          default = pkgs.mkShell {
+            packages = with pkgs; [
+              go
+              gopls
+              golangci-lint
+              zsh
+              tmux
+              nodejs # npx-launched ACP agents (claude-agent-acp, codex-acp)
+            ];
+            # Third-party zsh plugins loaded by the coexistence PTY tests.
+            ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING = "${pkgs.zsh-syntax-highlighting}/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh";
+            ECDY_TEST_ZSH_AUTOSUGGESTIONS = "${pkgs.zsh-autosuggestions}/share/zsh-autosuggestions/zsh-autosuggestions.zsh";
+            # A GOROOT inherited from the user's environment would pair this
+            # shell's go binary with a different standard library.
+            shellHook = ''
+              unset GOROOT
+            '';
+          };
+          zshVersions = import ./nix/zsh-versions.nix { inherit pkgs; };
+        in
+        {
+          inherit default;
+          # The PTY tests run against every supported zsh release:
+          #   nix develop .#zsh-matrix -c go test ./shell/
+          # Older releases are built from source on first use.
+          zsh-matrix = default.overrideAttrs {
+            ECDY_TEST_ZSH = pkgs.lib.concatMapStringsSep ":" (z: "${z}/bin/zsh") (
+              builtins.attrValues zshVersions
+            );
+          };
+        }
+      );
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
     };

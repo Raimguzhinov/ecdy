@@ -20,7 +20,7 @@ It uses your agents' own logins and subscriptions; there is no ecdy cloud and no
 
 ## Usage
 
-Add this to the end of `~/.zshrc`, after plugins that wrap `accept-line`
+Requires zsh 5.8 or newer (on older versions the plugin does not load). Add this to the end of `~/.zshrc`, after plugins that wrap `accept-line`
 (zsh-syntax-highlighting and zsh-autosuggestions work in either order):
 
 ```sh
@@ -57,6 +57,7 @@ exactly like in vanilla zsh.
 nix develop               # go, gopls, golangci-lint, zsh, tmux, nodejs
 go test -race ./...       # PTY tests need zsh; the devShell also provides the
                           # zsh plugins the coexistence tests load
+nix develop .#zsh-matrix -c go test ./shell/   # PTY tests on zsh 5.8.1, 5.9 and the latest
 golangci-lint run
 go run ./cmd/ecdy version
 go run ./cmd/ecdy classify --json --first-kind=command -- 'rm everything in tmp except configs'

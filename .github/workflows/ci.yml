@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: stable
-      - name: install zsh and plugins for the PTY tests
+      - name: install zsh and plugins for the PTY tests (a distribution build of zsh)
         run: sudo apt-get update && sudo apt-get install -y zsh zsh-syntax-highlighting zsh-autosuggestions
       - run: go vet ./...
       - run: go test -race ./...
@@ -40,4 +40,6 @@ jobs:
       - run: nix flake check
       - run: nix build
       - run: ./result/bin/ecdy version
-      - run: nix develop -c go test ./...
+      # PTY tests against every supported zsh release (nix/zsh-versions.nix);
+      # the go job covers a distribution-built zsh from apt.
+      - run: nix develop .#zsh-matrix -c go test ./...

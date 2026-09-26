@@ -43,6 +43,18 @@
 - devShell exports `ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING` / `ECDY_TEST_ZSH_AUTOSUGGESTIONS`; the CI
   `go` job installs zsh and both plugins from apt. `vendorHash` updated.
 
+### Follow-up: supported zsh versions (branch `zsh-matrix`)
+
+- Minimum supported zsh is 5.8 (Ubuntu 22.04, Debian 11, RHEL 9); the plugin checks it with
+  `is-at-least` and does not load on older versions (`TestMinVersion`).
+- `nix/zsh-versions.nix` builds 5.8.1 and 5.9 from the upstream tarballs (gcc 13: with gcc >= 14
+  their configure misdetects termcap and signal handling, and 5.9 hung in `pause()`) plus nixpkgs'
+  latest zsh. `nix develop .#zsh-matrix` sets `ECDY_TEST_ZSH`, and every PTY test runs as a subtest
+  per zsh; the CI `nix` job uses it. The `go` job keeps testing Ubuntu's zsh from apt.
+- Finding: upstream 5.8.1 and 5.9 do **not** reproduce the blank-prompt bug fixed above (the
+  pre-fix plugin passes on them); it needs Ubuntu's zsh 5.9 build. So the version matrix and the
+  distribution build catch different things, and both stay in CI.
+
 ### Verified locally (2026-09-27)
 
 - `nix develop -c go test -race ./...` — green; `go test -race -count=20 ./shell/` — green;
