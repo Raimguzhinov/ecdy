@@ -2,7 +2,7 @@
 
 > From *ecdysis* — molting: an arthropod sheds its old shell in order to grow.
 
-**Status: early development (M0 — skeleton). Nothing useful to install yet.**
+**Status: early development (M1 — classifier). Nothing useful to install yet.**
 
 ecdy is a smart layer on top of your real shell. You keep typing in zsh with your own config,
 completion, highlighting and history. On Enter, ecdy decides whether the line is a shell command
@@ -31,6 +31,7 @@ nix develop               # go, gopls, golangci-lint, zsh, tmux, nodejs
 go test -race ./...
 golangci-lint run
 go run ./cmd/ecdy version
+go run ./cmd/ecdy classify --json --first-kind=command -- 'rm everything in tmp except configs'
 nix build && ./result/bin/ecdy version
 ```
 

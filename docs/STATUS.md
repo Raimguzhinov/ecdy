@@ -1,36 +1,45 @@
 # Status
 
-## Current milestone: M0 — Skeleton
+## Current milestone: M1 — Classifier
 
 ### Done
 
-- `go.mod` (`github.com/Raimguzhinov/ecdy`), cobra CLI skeleton, `ecdy version`
-  (ldflags `-X main.version=…`, falls back to module version / VCS revision / `dev`) with tests.
-- `flake.nix`: devShell (go, gopls, golangci-lint, zsh, tmux, nodejs), `packages.default`
-  (`buildGoModule`, version from the flake's git revision), `formatter` (nixfmt).
-- `.golangci.yml` (v2 config), GitHub Actions CI: `go vet`, `go test -race`, `golangci-lint`,
-  plus a Nix job (`nix flake check`, `nix build`, `nix develop -c go test ./...`).
-- LICENSE (Apache-2.0), README stub.
+- `internal/classify`: pure `Classify(Input) Result` implementing the rule cascade from AGENTS.md
+  section 4 (empty line, `?` prefix, unknown first word → typo `Ask` or `Prompt`, known first word →
+  weighted natural-language signals, dangerous commands). Scoring and thresholds are in
+  [ADR 0001](adr/0001-classifier-signal-scoring.md).
+  - Own lightweight lexer for command positions / arguments / quoting; `mvdan.cc/sh/v3/syntax`
+    (`LangZsh`, experimental upstream) only for the "does it parse" signal.
+  - File-existence checks go through an injected `fs.StatFS`, at most 16 `Stat` calls per line.
+  - `Result` carries `reason`, `score`, `signals`, `prompt`, typo `suggestion`/`correction` and a
+    `dangerous` flag (the Ask dialog in M2 must default to the agent).
+  - `classify.FirstWord` skips assignments and precommand modifiers (`sudo -u x`, `env -i`, `time`, …);
+    the zsh plugin must skip the same words (`precommands` in `internal/classify/words.go`).
+- Golden table `internal/classify/testdata/cases.tsv`: 324 cases, including every example from
+  AGENTS.md sections 2 and 4, Russian, typos, pipes, heredocs, `sudo`, assignments, zsh syntax,
+  dangerous commands with and without signals.
+- Tests: golden, result details, "known first word is never `Prompt`" property, dangerous-command
+  table, lexer, OSA distance; `FuzzClassify`; `BenchmarkClassify` (~5 µs/op in-process).
+- `ecdy classify [--shell=zsh] [--first-kind=KIND|auto] [--cwd DIR] [--json] -- LINE`.
+  `auto` (the default, for manual use) guesses the kind from zsh builtin/reserved lists and `$PATH`.
+- Cold-start measurement: `ECDY_COLDSTART=1 go test ./cmd/ecdy -run ColdStart -v` (opt-in test
+  with a hard p99 < 15 ms check, also run in CI) and `BenchmarkClassifyColdStart`.
+- CI: cold-start step and a 30 s fuzz run added to the `go` job. `vendorHash` updated.
 
 ### Verified locally (2026-09-27)
 
-- `nix develop -c go test -race ./...` — green.
-- `nix develop -c golangci-lint run` — 0 issues.
-- `nix flake check`, `nix build && ./result/bin/ecdy version` — ok.
+- `nix develop -c go test -race ./...` — green; `golangci-lint run` — 0 issues.
+- Cold start, 300 execs of the built binary: p50 3.5 ms, p99 5.0 ms (budget 15 ms).
+- `go test ./internal/classify -fuzz FuzzClassify -fuzztime 60s` — no failures.
+- `nix build`, `nix flake check` — ok.
 
-### CI
+### Known limitations
 
-- PR #1: `go` and `nix` jobs green (run 36271433540). M0 DoD met.
+- Typo candidates are a built-in list (~150 commands) plus `Config.ExtraCommands`; the shell's
+  own command table is not used yet (see ADR 0001, consequences).
+- Unquoted English after a harmless known command (`echo this is a test`) is `Ask`, by design.
+- `Config` is not loaded from `config.toml` yet (no config package until it is needed).
 
-### Notes
+## Next: M2 — zsh integration
 
-- The devShell unsets `GOROOT`: an inherited `GOROOT` pointing at another Go
-  breaks builds with `compile: version "goX" does not match go tool version "goY"`.
-- When `go.mod` dependencies change, update `vendorHash` in `flake.nix`
-  (set it to `pkgs.lib.fakeHash`, run `nix build`, copy the `got:` hash).
-
-## Next: M1 — Classifier
-
-See [ROADMAP.md](ROADMAP.md).
-
-`internal/classify` + golden table (≥ 200 cases) + fuzz + benchmark + `ecdy classify`.
+See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m2-zsh`.

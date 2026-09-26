@@ -18,6 +18,11 @@ jobs:
           go-version: stable
       - run: go vet ./...
       - run: go test -race ./...
+      - name: classify cold-start budget (p99 < 15 ms)
+        run: go test ./cmd/ecdy -run TestClassifyColdStart -v
+        env:
+          ECDY_COLDSTART: "1"
+      - run: go test ./internal/classify -run '^$' -fuzz FuzzClassify -fuzztime 30s
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.13
