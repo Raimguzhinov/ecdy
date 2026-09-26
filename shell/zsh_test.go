@@ -84,6 +84,9 @@ func startZsh(t *testing.T, o zshOpts) *zshTerm {
 		`PS1='` + promptMark + `%h%# '`,
 		`HISTFILE=$HOME/.zsh_history HISTSIZE=100 SAVEHIST=100`,
 		`setopt INC_APPEND_HISTORY`,
+		// A loaded CI runner must not turn prompts into commands by missing
+		// the default deadline; TestFailOpen/slow sets its own.
+		`ECDY_CLASSIFY_TIMEOUT=5`,
 		o.rc,
 		o.load,
 		o.after,
@@ -103,6 +106,16 @@ func startZsh(t *testing.T, o zshOpts) *zshTerm {
 		"LC_ALL=C.UTF-8",
 	}
 	z := &zshTerm{Term: testutil.StartTerm(t, cmd), t: t, home: home}
+	z.Diag = func() string {
+		var b strings.Builder
+		b.WriteString("files in $HOME:\n")
+		entries, _ := os.ReadDir(home)
+		for _, e := range entries {
+			info, _ := e.Info()
+			fmt.Fprintf(&b, "  %s %d %s\n", e.Name(), info.Size(), info.ModTime().Format("15:04:05.000"))
+		}
+		return b.String()
+	}
 	z.Send(" source " + rcPath + enter)
 	z.Expect("loaded-42")
 	z.ExpectPrompt()

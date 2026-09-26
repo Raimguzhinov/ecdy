@@ -4,10 +4,13 @@ package testutil
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +25,10 @@ const DefaultTimeout = 10 * time.Second
 // Term runs a process under a pseudo-terminal and records everything it
 // prints.
 type Term struct {
+	// Diag, if set, is called on a timeout and its result added to the
+	// failure message.
+	Diag func() string
+
 	tb   testing.TB
 	cmd  *exec.Cmd
 	ptmx *os.File
@@ -111,7 +118,7 @@ func (t *Term) ExpectRe(re *regexp.Regexp) string {
 				t.tb.Fatalf("process exited before output matched %q\noutput after last match:\n%s", re, t.rest())
 			}
 		case <-deadline:
-			t.tb.Fatalf("timed out after %v waiting for %q\noutput after last match:\n%s", DefaultTimeout, re, t.rest())
+			t.tb.Fatalf("timed out after %v waiting for %q\noutput after last match:\n%s\n%s", DefaultTimeout, re, t.rest(), t.diag())
 		}
 	}
 }
@@ -121,6 +128,72 @@ func (t *Term) rest() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return Printable(t.out.String()[t.pos:])
+}
+
+// diag describes the state of the terminal for a failure message: the raw
+// tail of the output, the process tree (Linux only) and Diag.
+func (t *Term) diag() string {
+	var b strings.Builder
+	t.mu.Lock()
+	raw := t.out.Bytes()[t.pos:]
+	t.mu.Unlock()
+	const tail = 400
+	if len(raw) > tail {
+		raw = raw[len(raw)-tail:]
+	}
+	fmt.Fprintf(&b, "raw output tail: %q\n", raw)
+	b.WriteString(processTree(t.cmd.Process.Pid))
+	if t.Diag != nil {
+		b.WriteString(t.Diag())
+	}
+	return b.String()
+}
+
+// processTree lists pid and its descendants with their state, kernel wait
+// channel and command line, from /proc.
+func processTree(root int) string {
+	children := map[int][]int{}
+	entries, _ := os.ReadDir("/proc")
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		stat, err := os.ReadFile(filepath.Join("/proc", e.Name(), "stat"))
+		if err != nil {
+			continue
+		}
+		// pid (comm) state ppid ...; comm may contain spaces.
+		f := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
+		if len(f) < 2 {
+			continue
+		}
+		if ppid, err := strconv.Atoi(f[1]); err == nil {
+			children[ppid] = append(children[ppid], pid)
+		}
+	}
+	var b strings.Builder
+	b.WriteString("processes:\n")
+	var walk func(pid, depth int)
+	walk = func(pid, depth int) {
+		dir := filepath.Join("/proc", strconv.Itoa(pid))
+		stat, _ := os.ReadFile(filepath.Join(dir, "stat"))
+		state := "?"
+		if i := bytes.LastIndexByte(stat, ')'); i >= 0 {
+			if f := strings.Fields(string(stat[i+1:])); len(f) > 0 {
+				state = f[0]
+			}
+		}
+		wchan, _ := os.ReadFile(filepath.Join(dir, "wchan"))
+		cmdline, _ := os.ReadFile(filepath.Join(dir, "cmdline"))
+		fmt.Fprintf(&b, "%s%d %s wchan=%s %q\n", strings.Repeat("  ", depth+1), pid, state, wchan,
+			strings.ReplaceAll(strings.TrimRight(string(cmdline), "\x00"), "\x00", " "))
+		for _, c := range children[pid] {
+			walk(c, depth+1)
+		}
+	}
+	walk(root, 0)
+	return b.String()
 }
 
 // Mark moves the Expect position to the end of the output received so far.
@@ -136,7 +209,7 @@ func (t *Term) Wait() {
 	select {
 	case <-t.done:
 	case <-time.After(DefaultTimeout):
-		t.tb.Fatalf("process did not exit\noutput after last match:\n%s", t.rest())
+		t.tb.Fatalf("process did not exit\noutput after last match:\n%s\n%s", t.rest(), t.diag())
 	}
 }
 
