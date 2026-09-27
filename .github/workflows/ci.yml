@@ -20,6 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
+      # Caches store paths that cache.nixos.org does not have (zsh 5.8.1 and
+      # 5.9 from nix/zsh-versions.nix, the ecdy build) in the GitHub Actions
+      # cache. FlakeHub and the vendor's diagnostics endpoint are off.
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+        with:
+          use-gha-cache: true
+          use-flakehub: false
+          diagnostic-endpoint: ""
       - run: go vet ./...
       - run: go test -race ./...
       - name: classify cold-start budget (p99 < 15 ms)
@@ -35,6 +43,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+        with:
+          use-gha-cache: true
+          use-flakehub: false
+          diagnostic-endpoint: ""
       - run: nix flake check
       - run: nix build
       - run: ./result/bin/ecdy version

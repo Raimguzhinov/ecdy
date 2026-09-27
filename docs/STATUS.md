@@ -54,6 +54,8 @@
 - CI: both jobs run in the flake's environments. `go` runs vet, `-race` tests on the zsh matrix,
   cold start, fuzz and lint in the `zsh-matrix` devShell; `nix` checks packaging
   (`flake check`, `build`). The apt-installed zsh and `setup-go` are gone, so nothing runs twice.
+  Both jobs use magic-nix-cache (GitHub Actions cache; FlakeHub and diagnostics off), so the zsh
+  releases built from source are compiled once, not on every run.
 - The blank-prompt race fixed above is rare: it reproduced a handful of times in hundreds of runs
   (on a CI runner and in Docker with 1–2 CPUs), and 800 runs of the pre-fix plugin in the same
   container, on Ubuntu's zsh 5.9 and on nix-built 5.8.1/5.9/5.9.2, all passed. So there is no
