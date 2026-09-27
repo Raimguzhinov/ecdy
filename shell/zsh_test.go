@@ -65,12 +65,8 @@ type zshTerm struct {
 
 // startZsh starts `zsh -f -i` under a PTY in a temporary $HOME and loads the
 // plugin by sending a `source` line, as a user's .zshrc would.
-func startZsh(t *testing.T, o zshOpts) *zshTerm {
+func startZsh(t *testing.T, zsh string, o zshOpts) *zshTerm {
 	t.Helper()
-	zsh, err := exec.LookPath("zsh")
-	if err != nil {
-		t.Skip("zsh is not installed")
-	}
 	home := t.TempDir()
 	if o.path == "" {
 		o.path = filepath.Dir(ecdyBin) + string(os.PathListSeparator) + os.Getenv("PATH")
@@ -139,15 +135,19 @@ func (z *zshTerm) Run(line, want string) {
 
 const askReply = "ecdy ask (no agent yet): "
 
-func TestCommand(t *testing.T) {
-	z := startZsh(t, zshOpts{})
+func TestCommand(t *testing.T) { forEachZsh(t, testCommand) }
+
+func testCommand(t *testing.T, zsh string) {
+	z := startZsh(t, zsh, zshOpts{})
 	z.Run(`print -r -- cmd-$((6*7))`, "cmd-42")
 	// A known command with a word argument still runs.
 	z.Run(`ls -d rc.zsh && print -r -- ls-$((6*7))`, "ls-42")
 }
 
-func TestPrompt(t *testing.T) {
-	z := startZsh(t, zshOpts{})
+func TestPrompt(t *testing.T) { forEachZsh(t, testPrompt) }
+
+func testPrompt(t *testing.T, zsh string) {
+	z := startZsh(t, zsh, zshOpts{})
 	z.Run(`explain this error`, askReply+"explain this error")
 	// Nothing in the prompt is expanded by the shell.
 	z.Run(`why does $HOME != "x" fail?! * 'q'`, askReply+`why does $HOME != "x" fail?! * 'q'`)
@@ -157,16 +157,20 @@ func TestPrompt(t *testing.T) {
 
 // TestForceCommand: Alt+Enter runs the line as a command, skipping the
 // classifier.
-func TestForceCommand(t *testing.T) {
-	z := startZsh(t, zshOpts{})
+func TestForceCommand(t *testing.T) { forEachZsh(t, testForceCommand) }
+
+func testForceCommand(t *testing.T, zsh string) {
+	z := startZsh(t, zsh, zshOpts{})
 	z.Send("explain this error" + altEnter)
 	z.Expect("command not found: explain")
 	z.ExpectPrompt()
 }
 
-func TestAskDialog(t *testing.T) {
+func TestAskDialog(t *testing.T) { forEachZsh(t, testAskDialog) }
+
+func testAskDialog(t *testing.T, zsh string) {
 	const dangerous = "rm everything in tmp except configs"
-	z := startZsh(t, zshOpts{})
+	z := startZsh(t, zsh, zshOpts{})
 	configs := filepath.Join(z.home, "configs")
 	if err := os.WriteFile(configs, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -216,8 +220,10 @@ func TestAskDialog(t *testing.T) {
 	exists(false)
 }
 
-func TestAskTypo(t *testing.T) {
-	z := startZsh(t, zshOpts{})
+func TestAskTypo(t *testing.T) { forEachZsh(t, testAskTypo) }
+
+func testAskTypo(t *testing.T, zsh string) {
+	z := startZsh(t, zsh, zshOpts{})
 	z.Send(`ehco typo-$((6*7))` + enter)
 	z.Expect("did you mean `echo typo-$((6*7))`?")
 	z.Send("f")
@@ -233,7 +239,9 @@ func TestAskTypo(t *testing.T) {
 
 // TestFailOpen: whatever goes wrong with the binary, Enter behaves like in
 // vanilla zsh (AGENTS.md, invariant 2).
-func TestFailOpen(t *testing.T) {
+func TestFailOpen(t *testing.T) { forEachZsh(t, testFailOpen) }
+
+func testFailOpen(t *testing.T, zsh string) {
 	dir := t.TempDir()
 	scripts := map[string]string{
 		"crash":   "#!/bin/sh\nexit 2\n",
@@ -247,24 +255,26 @@ func TestFailOpen(t *testing.T) {
 	}
 	plugin := sourceFile(t)
 	tests := []struct {
-		name string
-		opts zshOpts
+		name  string
+		opts  zshOpts
+		lines int // builtin command lines after the first one
 	}{
 		// No ecdy in $PATH: the plugin is sourced directly.
-		{"missing", zshOpts{load: "source " + plugin, path: "/usr/bin:/bin:" + filepath.Dir(zshPath(t))}},
-		{"crash", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "crash")}},
-		{"slow", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "slow") + " ECDY_CLASSIFY_TIMEOUT=0.2"}},
-		{"garbage", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "garbage")}},
+		{"missing", zshOpts{load: "source " + plugin, path: "/usr/bin:/bin:" + filepath.Dir(zsh)}, 0},
+		{"crash", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "crash")}, 0},
+		{"slow", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "slow") + " ECDY_CLASSIFY_TIMEOUT=0.2"}, 0},
+		{"garbage", zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "garbage")}, 0},
 		// The deadline passes before the classifier even reports its pid.
 		// It must still be stopped: a child exiting while zsh 5.9 draws
 		// the next prompt left that prompt blank.
-		{"deadline", zshOpts{after: "ECDY_CLASSIFY_TIMEOUT=0"}},
+		// It is a race, so give it many lines.
+		{"deadline", zshOpts{after: "ECDY_CLASSIFY_TIMEOUT=0"}, 20},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			z := startZsh(t, tt.opts)
+			z := startZsh(t, zsh, tt.opts)
 			z.Run("explain this error", "command not found: explain")
-			for range 3 {
+			for range max(tt.lines, 3) {
 				z.Run(`print -r -- still-$((6*7))`, "still-42")
 			}
 		})
@@ -273,8 +283,10 @@ func TestFailOpen(t *testing.T) {
 
 // TestHistory: the history gets the line the user typed, not the
 // `ecdy ask -- ...` it was rewritten to.
-func TestHistory(t *testing.T) {
-	z := startZsh(t, zshOpts{})
+func TestHistory(t *testing.T) { forEachZsh(t, testHistory) }
+
+func testHistory(t *testing.T, zsh string) {
+	z := startZsh(t, zsh, zshOpts{})
 	z.Run("explain this error", askReply+"explain this error")
 	z.Run(`print -r -- one-$((6*7))`, "one-42")
 	z.Send(`fc -ln 1 | tr '\n' '|' | sed 's/^/hi''st=/;s/$/=e''nd/'` + enter)
@@ -296,9 +308,11 @@ func TestHistory(t *testing.T) {
 }
 
 // TestHistoryUp: Up right after a prompt recalls the line as typed.
-func TestHistoryUp(t *testing.T) {
+func TestHistoryUp(t *testing.T) { forEachZsh(t, testHistoryUp) }
+
+func testHistoryUp(t *testing.T, zsh string) {
 	// Ctrl+T saves the buffer to a file, to look at it without running it.
-	z := startZsh(t, zshOpts{rc: `_save_buffer() { print -r -- $BUFFER > $HOME/buffer }; zle -N _save_buffer; bindkey '^T' _save_buffer`})
+	z := startZsh(t, zsh, zshOpts{rc: `_save_buffer() { print -r -- $BUFFER > $HOME/buffer }; zle -N _save_buffer; bindkey '^T' _save_buffer`})
 	z.Run("explain this error", askReply+"explain this error")
 	z.Send(up + ctrlT + ctrlU + `print -r -- saved-$((6*7))` + enter)
 	z.Expect("saved-42")
@@ -314,7 +328,9 @@ func TestHistoryUp(t *testing.T) {
 
 // TestCoexistence loads zsh-syntax-highlighting and zsh-autosuggestions
 // before and after ecdy. Their paths come from the nix devShell.
-func TestCoexistence(t *testing.T) {
+func TestCoexistence(t *testing.T) { forEachZsh(t, testCoexistence) }
+
+func testCoexistence(t *testing.T, zsh string) {
 	var plugins []string
 	for _, env := range []string{"ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING", "ECDY_TEST_ZSH_AUTOSUGGESTIONS"} {
 		p := os.Getenv(env)
@@ -332,7 +348,7 @@ func TestCoexistence(t *testing.T) {
 		{"ecdy first", zshOpts{after: others}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			z := startZsh(t, tt.opts)
+			z := startZsh(t, zsh, tt.opts)
 			z.Run(`print -r -- cmd-$((6*7))`, "cmd-42")
 			z.Run("explain this error", askReply+"explain this error")
 			z.Send(`ehco typo-$((6*7))` + enter)
@@ -367,13 +383,26 @@ func sourceFile(t *testing.T) string {
 	return filepath.Join(filepath.Dir(file), "zsh", "ecdy.plugin.zsh")
 }
 
-func zshPath(t *testing.T) string {
+// forEachZsh runs test as a subtest for every zsh in $ECDY_TEST_ZSH (a
+// list of zsh binaries, like $PATH; the zsh-matrix devShell sets it), or
+// for the zsh in $PATH.
+func forEachZsh(t *testing.T, test func(t *testing.T, zsh string)) {
 	t.Helper()
-	p, err := exec.LookPath("zsh")
-	if err != nil {
-		t.Skip("zsh is not installed")
+	zshes := filepath.SplitList(os.Getenv("ECDY_TEST_ZSH"))
+	if len(zshes) == 0 {
+		zsh, err := exec.LookPath("zsh")
+		if err != nil {
+			t.Skip("zsh is not installed")
+		}
+		zshes = []string{zsh}
 	}
-	return p
+	for _, zsh := range zshes {
+		out, err := exec.Command(zsh, "-f", "-c", "print -r -- $ZSH_VERSION").Output()
+		if err != nil {
+			t.Fatalf("%s: %v", zsh, err)
+		}
+		t.Run("zsh-"+strings.TrimSpace(string(out)), func(t *testing.T) { test(t, zsh) })
+	}
 }
 
 func shellQuote(s string) string {
@@ -382,7 +411,9 @@ func shellQuote(s string) string {
 
 // TestFirstKind checks that the plugin finds the same first word as
 // classify.FirstWord and names its kind like `whence -w`.
-func TestFirstKind(t *testing.T) {
+func TestFirstKind(t *testing.T) { forEachZsh(t, testFirstKind) }
+
+func testFirstKind(t *testing.T, zsh string) {
 	cases := []struct{ line, word, kind string }{
 		{"", "", "none"},
 		{"ls -la", "ls", "command"},
@@ -409,8 +440,8 @@ func TestFirstKind(t *testing.T) {
 	for _, c := range cases {
 		fmt.Fprintf(&script, "_ecdy_first_kind %s; print -r -- $REPLY\n", shellQuote(c.line))
 	}
-	cmd := exec.Command(zshPath(t), "-f", "-i", "-c", script.String())
-	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin:" + filepath.Dir(zshPath(t))}
+	cmd := exec.Command(zsh, "-f", "-i", "-c", script.String())
+	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin:" + filepath.Dir(zsh)}
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("zsh: %v\n%s", err, out)
@@ -425,6 +456,25 @@ func TestFirstKind(t *testing.T) {
 		}
 		if w := classify.FirstWord(c.line); w != c.word {
 			t.Errorf("classify.FirstWord(%q) = %q, want %q", c.line, w, c.word)
+		}
+	}
+}
+
+// TestMinVersion: on a zsh older than 5.8 the plugin does not load, so Enter
+// stays vanilla. $ZSH_VERSION is faked, which is all is-at-least looks at.
+func TestMinVersion(t *testing.T) { forEachZsh(t, testMinVersion) }
+
+func testMinVersion(t *testing.T, zsh string) {
+	for version, want := range map[string]string{"5.7.1": "builtin", "5.8": "user:_ecdy_accept_line"} {
+		script := "ZSH_VERSION=" + version + "; source " + shellQuote(sourceFile(t)) + "; print -r -- $widgets[accept-line]"
+		cmd := exec.Command(zsh, "-f", "-i", "-c", script)
+		cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + filepath.Dir(zsh)}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("zsh: %v\n%s", err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("zsh %s: accept-line is %q, want %q", version, got, want)
 		}
 	}
 }

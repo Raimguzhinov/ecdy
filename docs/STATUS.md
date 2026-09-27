@@ -43,6 +43,28 @@
 - devShell exports `ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING` / `ECDY_TEST_ZSH_AUTOSUGGESTIONS`; the CI
   `go` job installs zsh and both plugins from apt. `vendorHash` updated.
 
+### Follow-up: supported zsh versions and agent tooling (branch `chore/dev-tooling`)
+
+- Minimum supported zsh is 5.8 (Ubuntu 22.04, Debian 11, RHEL 9); the plugin checks it with
+  `is-at-least` and does not load on older versions (`TestMinVersion`).
+- `nix/zsh-versions.nix` builds 5.8.1 and 5.9 from the upstream tarballs (gcc 13: with gcc >= 14
+  their configure misdetects termcap and signal handling, and 5.9 hung in `pause()`) plus nixpkgs'
+  latest zsh. `nix develop .#zsh-matrix` sets `ECDY_TEST_ZSH`, and every PTY test runs as a subtest
+  per zsh.
+- CI: both jobs run in the flake's environments. `go` runs vet, `-race` tests on the zsh matrix,
+  cold start, fuzz and lint in the `zsh-matrix` devShell; `nix` checks packaging
+  (`flake check`, `build`). The apt-installed zsh and `setup-go` are gone, so nothing runs twice.
+  Both jobs use magic-nix-cache (GitHub Actions cache; FlakeHub and diagnostics off), so the zsh
+  releases built from source are compiled once, not on every run.
+- The blank-prompt race fixed above is rare: it reproduced a handful of times in hundreds of runs
+  (on a CI runner and in Docker with 1–2 CPUs), and 800 runs of the pre-fix plugin in the same
+  container, on Ubuntu's zsh 5.9 and on nix-built 5.8.1/5.9/5.9.2, all passed. So there is no
+  evidence that it depends on the zsh version or its distribution build; an earlier note here
+  claiming it did was wrong. `TestFailOpen/deadline` runs 20 lines to give it more chances.
+- Agent skills in `.agents/skills/` (`.claude/skills` → symlink): `ci-repro` (reproduce CI jobs
+  locally, incl. running PTY tests on one CPU) and `milestone-finish` (the checklist before a
+  PR). AGENTS.md section 8 gained the testing rules learned in M2.
+
 ### Verified locally (2026-09-27)
 
 - `nix develop -c go test -race ./...` — green; `go test -race -count=20 ./shell/` — green;
