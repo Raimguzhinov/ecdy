@@ -52,6 +52,9 @@ type Script struct {
 	// agent never sends $/cancel_request for them (an unstable part of the
 	// protocol that not every agent implements).
 	NoCancelRequest bool `json:"no_cancel_request,omitempty"`
+	// ExitDelayMS delays the exit after stdin is closed, as a slow agent
+	// shutting down would.
+	ExitDelayMS int `json:"exit_delay_ms,omitempty"`
 	// Record, if set, is a file the agent appends every request it receives
 	// to, one JSON object ({"method": ..., "params": ...}) per line.
 	Record string `json:"record,omitempty"`
@@ -81,6 +84,10 @@ type Step struct {
 	// "permission: <option id or cancelled>\n". A cancelled outcome ends the
 	// turn with stop reason cancelled.
 	Permission *Tool `json:"permission,omitempty"`
+	// WithdrawMS, with Permission, withdraws the request ($/cancel_request)
+	// if it is not answered within that many milliseconds; the agent then
+	// sends "permission: withdrawn\n" and goes on with the turn.
+	WithdrawMS int `json:"withdraw_ms,omitempty"`
 	// WaitCancel blocks until session/cancel and ends the turn with stop
 	// reason cancelled.
 	WaitCancel bool `json:"wait_cancel,omitempty"`
@@ -122,10 +129,11 @@ func Main() {
 	if s.IgnoreTerm {
 		signal.Ignore(syscall.SIGTERM)
 	}
-	a := &agent{script: s, cancel: make(chan struct{})}
+	a := &agent{script: s}
 	a.conn = acp.NewAgentSideConnection(a, os.Stdout, os.Stdin)
 	a.conn.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	<-a.conn.Done()
+	time.Sleep(time.Duration(s.ExitDelayMS) * time.Millisecond)
 	os.Exit(0)
 }
 
@@ -181,11 +189,10 @@ type agent struct {
 	script Script
 	conn   *acp.AgentSideConnection
 
-	recordMu   sync.Mutex
-	cancelOnce sync.Once
-	cancel     chan struct{} // closed by session/cancel
+	recordMu sync.Mutex
 
 	mu       sync.Mutex
+	cancel   chan struct{}              // of the current turn; closed by session/cancel
 	sessions int                        // session/new calls so far
 	history  map[acp.SessionId][]string // the prompts of each session
 }
@@ -237,7 +244,16 @@ func (a *agent) NewSession(_ context.Context, p acp.NewSessionRequest) (acp.NewS
 
 func (a *agent) Cancel(_ context.Context, p acp.CancelNotification) error {
 	a.record(acp.AgentMethodSessionCancel, p)
-	a.cancelOnce.Do(func() { close(a.cancel) })
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cancel == nil {
+		return nil // no turn yet
+	}
+	select {
+	case <-a.cancel:
+	default:
+		close(a.cancel)
+	}
 	return nil
 }
 
@@ -256,6 +272,8 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 	}
 	a.history[p.SessionId] = append(a.history[p.SessionId], text)
 	history := strings.Join(a.history[p.SessionId], " | ")
+	cancel := make(chan struct{})
+	a.cancel = cancel
 	a.mu.Unlock()
 	for _, s := range a.script.Turn {
 		var err error
@@ -288,6 +306,10 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 			if a.script.NoCancelRequest {
 				rctx = context.WithoutCancel(ctx)
 			}
+			withdraw := context.CancelFunc(func() {})
+			if s.WithdrawMS > 0 {
+				rctx, withdraw = context.WithTimeout(rctx, time.Duration(s.WithdrawMS)*time.Millisecond)
+			}
 			var res acp.RequestPermissionResponse
 			res, err = a.conn.RequestPermission(rctx, acp.RequestPermissionRequest{
 				SessionId: p.SessionId,
@@ -302,8 +324,14 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 					{OptionId: OptReject, Name: "Reject", Kind: acp.PermissionOptionKindRejectOnce},
 				},
 			})
+			withdrawn := rctx.Err() != nil
+			withdraw()
 			// The SDK cancels ctx on session/cancel, which also fails a
 			// pending permission request.
+			if err != nil && s.WithdrawMS > 0 && ctx.Err() == nil && withdrawn {
+				err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText("permission: withdrawn\n"))
+				break
+			}
 			if err != nil && ctx.Err() == nil {
 				return acp.PromptResponse{}, fmt.Errorf("request permission: %w", err)
 			}
@@ -316,10 +344,10 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 				return stop(acp.StopReasonCancelled)
 			}
 		case s.WaitCancel:
-			<-a.cancel
+			<-cancel
 			return stop(acp.StopReasonCancelled)
 		case s.AwaitCancel:
-			<-a.cancel
+			<-cancel
 		case s.Hang:
 			select {}
 		case s.Exit != nil:
