@@ -3,7 +3,7 @@
 //
 // Protocol: https://agentclientprotocol.com/protocol/overview. A Conn does
 // one initialize and one session/new, then any number of session/prompt
-// turns.
+// turns; NewSession replaces the session with a new one.
 package acpclient
 
 import (
@@ -107,18 +107,18 @@ type Conn struct {
 	opts    Options
 	handler Handler
 
-	cmd     *exec.Cmd
-	conn    *acp.ClientSideConnection
-	stdin   *os.File // our end of the agent's stdin
-	stdout  *os.File // our end of the agent's stdout
-	stderr  *tail
-	exited  chan struct{} // closed once the process is reaped
-	errDone chan struct{} // closed when the agent's stderr is read to EOF
-	waitErr error         // valid after exited is closed
-
-	session acp.SessionId
+	cmd         *exec.Cmd
+	conn        *acp.ClientSideConnection
+	authMethods []acp.AuthMethod
+	stdin       *os.File // our end of the agent's stdin
+	stdout      *os.File // our end of the agent's stdout
+	stderr      *tail
+	exited      chan struct{} // closed once the process is reaped
+	errDone     chan struct{} // closed when the agent's stderr is read to EOF
+	waitErr     error         // valid after exited is closed
 
 	mu         sync.Mutex
+	session    acp.SessionId
 	turnCtx    context.Context // the current turn; nil between turns
 	cancelTurn context.CancelFunc
 
@@ -240,16 +240,35 @@ func (c *Conn) setup(ctx context.Context) error {
 		// agent's version (initialization#version-negotiation).
 		return fmt.Errorf("agent speaks ACP version %d, ecdy supports %d", init.ProtocolVersion, acp.ProtocolVersionNumber)
 	}
-	sess, err := c.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: c.opts.Dir, McpServers: []acp.McpServer{}})
+	c.authMethods = init.AuthMethods
+	return c.NewSession(ctx, c.opts.Dir)
+}
+
+// NewSession starts a new session in dir (absolute) with session/new; the
+// following turns belong to it. It must not be called during a turn.
+func (c *Conn) NewSession(ctx context.Context, dir string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("session directory %q is not absolute", dir)
+	}
+	sess, err := c.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: dir, McpServers: []acp.McpServer{}})
 	if err != nil {
 		var re *acp.RequestError
 		if errors.As(err, &re) && re.Code == acp.NewAuthRequired(nil).Code {
-			return &AuthError{Methods: init.AuthMethods}
+			return &AuthError{Methods: c.authMethods}
 		}
 		return c.connErr("session/new", err)
 	}
+	c.mu.Lock()
 	c.session = sess.SessionId
+	c.mu.Unlock()
 	return nil
+}
+
+// Session returns the id of the current session.
+func (c *Conn) Session() acp.SessionId {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.session
 }
 
 // Prompt sends one prompt and blocks until the turn ends, returning the stop
@@ -260,8 +279,9 @@ func (c *Conn) setup(ctx context.Context) error {
 func (c *Conn) Prompt(ctx context.Context, text string) (acp.StopReason, error) {
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	session := c.Session()
 	sendCancel := sync.OnceFunc(func() {
-		_ = c.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: c.session})
+		_ = c.conn.Cancel(context.Background(), acp.CancelNotification{SessionId: session})
 	})
 	c.mu.Lock()
 	// Cancelling from the permission dialog sends session/cancel before the
@@ -284,7 +304,7 @@ func (c *Conn) Prompt(ctx context.Context, text string) (acp.StopReason, error) 
 		// the stop reason. A dead agent ends this call through the
 		// connection.
 		resp, err := c.conn.Prompt(context.Background(), acp.PromptRequest{
-			SessionId: c.session,
+			SessionId: session,
 			Prompt:    []acp.ContentBlock{acp.TextBlock(text)},
 		})
 		done <- result{resp, err}
@@ -399,7 +419,7 @@ var _ acp.Client = (*client)(nil)
 
 func (cl *client) SessionUpdate(ctx context.Context, n acp.SessionNotification) error {
 	defer cl.c.updates.handle()
-	if n.SessionId == cl.c.session {
+	if n.SessionId == cl.c.Session() {
 		cl.c.handler.SessionUpdate(ctx, n.Update)
 	}
 	return nil
@@ -409,9 +429,9 @@ func (cl *client) RequestPermission(ctx context.Context, req acp.RequestPermissi
 	cancelled := acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{Cancelled: &acp.RequestPermissionOutcomeCancelled{}}}
 	c := cl.c
 	c.mu.Lock()
-	turnCtx, cancelTurn := c.turnCtx, c.cancelTurn
+	turnCtx, cancelTurn, session := c.turnCtx, c.cancelTurn, c.session
 	c.mu.Unlock()
-	if turnCtx == nil || req.SessionId != c.session {
+	if turnCtx == nil || req.SessionId != session {
 		return cancelled, nil
 	}
 	// After session/cancel every pending permission request must be
