@@ -2,7 +2,7 @@
 
 > From *ecdysis* — molting: an arthropod sheds its old shell in order to grow.
 
-**Status: early development (M3 — ACP one-shot). Each prompt starts the agent anew: the conversation does not continue across prompts yet, and the agent sees no shell context.**
+**Status: early development (M4 — daemon and continuity). The conversation continues across the prompts of one shell; the agent does not see your shell history yet (M5).**
 
 ecdy is a smart layer on top of your real shell. You keep typing in zsh with your own config,
 completion, highlighting and history. On Enter, ecdy decides whether the line is a shell command
@@ -53,8 +53,7 @@ exactly like in vanilla zsh.
 
 ## Agents
 
-A prompt runs `ecdy ask -- '<prompt>'`: it starts the agent in the current directory, sends the
-prompt in a new ACP session, streams the reply and exits. Tool calls appear as one status line each
+A prompt runs `ecdy ask -- '<prompt>'`, which sends it to the agent and streams the reply. Tool calls appear as one status line each
 (`⚙ Read main.go ✓`, `$ go test ./... ✗`); `ecdy ask -v` also shows thoughts, plans, tool output and
 the agent's stderr.
 
@@ -67,11 +66,13 @@ Built-in agents (the launch commands of the [ACP Registry](https://github.com/ag
 | `gemini` | `gemini --acp` |
 | `opencode` | `opencode acp` |
 
-Pick one per prompt with `ecdy ask --agent codex -- ...`, or add and override agents in
+Switch the agent of the current shell with `ecdy use codex` (`ecdy use` prints it), pick one for a
+single prompt with `ecdy ask --agent codex -- ...`, or add and override agents in
 `~/.config/ecdy/config.toml` (`$XDG_CONFIG_HOME/ecdy/config.toml`):
 
 ```toml
 default_agent = "codex"
+idle_timeout = "30m"             # stop the session's agents after this long without prompts
 
 [agents.claude]
 command = ["claude-agent-acp"]   # installed globally instead of npx
@@ -94,6 +95,23 @@ allowed by default, and keys typed before the dialog appeared are discarded. Wit
 **Ctrl+C** cancels the turn (`session/cancel`) and waits for the agent to stop; a second Ctrl+C
 stops the agent at once. Exit status: 0 — the turn completed, 1 — agent or protocol error,
 130 — cancelled.
+
+**Conversations.** Every shell that loads the plugin is a session (`ECDY_SESSION`). Its first
+prompt starts a small daemon, which keeps the agent running, so later prompts skip the agent's
+start-up and continue the same conversation. Each agent keeps its own conversation while the daemon
+runs.
+
+- `ecdy new` — the next prompt starts a new conversation (in the directory it is typed in);
+- `ecdy use <agent>` — switch the shell's agent;
+- `ecdy daemon status` — the daemon, its agents, their directories;
+- `ecdy daemon stop` — stop them now (the next prompt starts afresh, with the shell's current
+  environment: the agent keeps the environment it was started with).
+
+A conversation keeps the directory it started in; a prompt from outside it says so. The daemon
+stops when the shell exits (even if it is killed), after `idle_timeout` without prompts, or with
+`ecdy daemon stop`. Its socket lives in `$XDG_RUNTIME_DIR/ecdy/` (mode 0700; `$TMPDIR/ecdy-<uid>/`
+without `XDG_RUNTIME_DIR`). `ecdy ask` outside such a shell (no `ECDY_SESSION`, e.g. in a script)
+starts the agent for that one prompt.
 
 Set `ECDY_LOG=debug` (or `info`, `warn`, `error`) to log protocol diagnostics to
 `$XDG_STATE_HOME/ecdy/ecdy.log` (`~/.local/state/ecdy/ecdy.log`).

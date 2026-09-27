@@ -312,9 +312,10 @@ zsh -f -c 'eval "$(go run ./cmd/ecdy init zsh)"; ...'   # manual plugin check
 
 ## 9. Open questions (decide via ADR, never silently)
 
-1. Changing cwd in the middle of an ACP session: `session/new` receives a cwd. If the user moved to another project — start a new session
-   automatically, ask, or only update the context? Draft: when leaving the git root, suggest `ecdy new`.
-2. Do we need the daemon if the agent supports `session/load`? For some agents one-shot + load may be enough.
+1. ~~Changing cwd in the middle of an ACP session.~~ Decided in [ADR 0003](docs/adr/0003-session-daemon.md):
+   the session keeps its cwd, a prompt from outside it prints a notice suggesting `ecdy new`.
+2. ~~Do we need the daemon if the agent supports `session/load`?~~ Yes, [ADR 0003](docs/adr/0003-session-daemon.md):
+   `session/load` still pays the agent's start-up and replays the whole conversation; not every agent has it.
 3. How to show long agent replies without flooding the scrollback (folding, pager, `ecdy last`)?
 4. Agents' "allow always" permissions vs ecdy's policy: whose wins and where is it stored?
 5. Name: check `ecdy` for availability on GitHub, crates/npm/nixpkgs and domains before the first public release.
