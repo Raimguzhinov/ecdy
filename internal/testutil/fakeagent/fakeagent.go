@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -60,8 +61,12 @@ type Script struct {
 
 // Step is one action of a prompt turn. Exactly one field is set.
 type Step struct {
-	Text    string `json:"text,omitempty"`    // agent_message_chunk
-	Echo    bool   `json:"echo,omitempty"`    // the prompt's text and "\n" as a chunk
+	Text string `json:"text,omitempty"` // agent_message_chunk
+	Echo bool   `json:"echo,omitempty"` // the prompt's text and "\n" as a chunk
+	// History sends "history: " and the prompts of this session so far,
+	// this one included, joined by " | ", and "\n": what the agent
+	// remembers of the conversation.
+	History bool   `json:"history,omitempty"`
 	Thought string `json:"thought,omitempty"` // agent_thought_chunk
 	Stderr  string `json:"stderr,omitempty"`  // written to stderr
 	Raw     string `json:"raw,omitempty"`     // written to stdout as one line, bypassing the SDK
@@ -149,6 +154,7 @@ func WriteScript(dir string, s Script) (string, error) {
 type Request struct {
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
+	Pid    int             `json:"pid"` // of the agent process that received it
 }
 
 // ReadRecord reads the requests recorded to path.
@@ -178,6 +184,10 @@ type agent struct {
 	recordMu   sync.Mutex
 	cancelOnce sync.Once
 	cancel     chan struct{} // closed by session/cancel
+
+	mu       sync.Mutex
+	sessions int                        // session/new calls so far
+	history  map[acp.SessionId][]string // the prompts of each session
 }
 
 var _ acp.Agent = (*agent)(nil)
@@ -187,7 +197,7 @@ func (a *agent) record(method string, params any) {
 		return
 	}
 	p, _ := json.Marshal(params)
-	line, _ := json.Marshal(Request{Method: method, Params: p})
+	line, _ := json.Marshal(Request{Method: method, Params: p, Pid: os.Getpid()})
 	a.recordMu.Lock()
 	defer a.recordMu.Unlock()
 	f, err := os.OpenFile(a.script.Record, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
@@ -219,7 +229,10 @@ func (a *agent) NewSession(_ context.Context, p acp.NewSessionRequest) (acp.NewS
 	if a.script.AuthRequired {
 		return acp.NewSessionResponse{}, acp.NewAuthRequired(nil)
 	}
-	return acp.NewSessionResponse{SessionId: "fake-session"}, nil
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sessions++
+	return acp.NewSessionResponse{SessionId: acp.SessionId(fmt.Sprintf("fake-session-%d", a.sessions))}, nil
 }
 
 func (a *agent) Cancel(_ context.Context, p acp.CancelNotification) error {
@@ -231,19 +244,28 @@ func (a *agent) Cancel(_ context.Context, p acp.CancelNotification) error {
 func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
 	a.record(acp.AgentMethodSessionPrompt, p)
 	stop := func(r acp.StopReason) (acp.PromptResponse, error) { return acp.PromptResponse{StopReason: r}, nil }
+	var text string
+	for _, b := range p.Prompt {
+		if b.Text != nil {
+			text += b.Text.Text
+		}
+	}
+	a.mu.Lock()
+	if a.history == nil {
+		a.history = map[acp.SessionId][]string{}
+	}
+	a.history[p.SessionId] = append(a.history[p.SessionId], text)
+	history := strings.Join(a.history[p.SessionId], " | ")
+	a.mu.Unlock()
 	for _, s := range a.script.Turn {
 		var err error
 		switch {
 		case s.Text != "":
 			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText(s.Text))
 		case s.Echo:
-			var text string
-			for _, b := range p.Prompt {
-				if b.Text != nil {
-					text += b.Text.Text
-				}
-			}
 			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText(text+"\n"))
+		case s.History:
+			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText("history: "+history+"\n"))
 		case s.Thought != "":
 			err = a.update(ctx, p.SessionId, acp.UpdateAgentThoughtText(s.Thought))
 		case s.Raw != "":
