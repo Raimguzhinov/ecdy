@@ -278,9 +278,9 @@ User installation (like atuin/zoxide): `eval "$(ecdy init zsh)"` in `.zshrc`.
 - **Update `docs/STATUS.md`** at the end of every session: what's done, what's broken, the next step.
 - **Trust a test only after seeing it fail.** Revert the fix or break the code locally, watch the new
   test go red, restore. Every timeout or deadline gets a test with the extreme value (`0`, a hung child).
-- **Shell integration is tested on two axes**: zsh releases (`nix develop .#zsh-matrix`: 5.8.1 — the
-  oldest supported, 5.9, the latest) and a distribution build of zsh (Ubuntu's, in the CI `go` job).
-  They catch different bugs. PTY tests also run with `-race -count=20` before a PR.
+- **Shell integration is tested on every supported zsh** (`nix develop .#zsh-matrix`: 5.8.1 — the
+  oldest supported, 5.9, the latest); CI runs the same devShell. PTY tests also run with
+  `-race -count=20` before a PR, and on one CPU after timing-sensitive changes.
 - **Reproduce a CI failure before fixing it**, and do not guess from the log alone.
 - **Skills for coding agents** live in `.agents/skills/` (`.claude/skills` is a symlink to it):
   `ci-repro` reproduces the CI jobs locally, `milestone-finish` is the checklist before a PR.
@@ -299,7 +299,6 @@ go test ./internal/classify -bench . -benchmem
 go test ./internal/classify -fuzz FuzzClassify -fuzztime 60s
 golangci-lint run
 nix develop .#zsh-matrix -c go test ./shell/ # PTY tests on zsh 5.8.1, 5.9 and the latest
-.agents/skills/ci-repro/ubuntu.sh            # the CI go job in Docker (Ubuntu's zsh)
 go run ./cmd/ecdy classify --json --first-kind=command -- 'rm everything in tmp except configs'
 zsh -f -c 'eval "$(go run ./cmd/ecdy init zsh)"; ...'   # manual plugin check
 ```
