@@ -525,6 +525,9 @@ func (t *tail) String() string {
 // Pid returns the agent's pid, which is also its process group id.
 func (c *Conn) Pid() int { return c.cmd.Process.Pid }
 
+// Done is closed once the agent process has exited.
+func (c *Conn) Done() <-chan struct{} { return c.exited }
+
 // drainTimeout bounds the waits for session/updates already read (before a
 // permission dialog, after the agent exits): a session/update the SDK fails
 // to decode is read but never handled. After an exit it also bounds the wait

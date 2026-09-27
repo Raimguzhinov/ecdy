@@ -654,3 +654,22 @@ func TestNewSession(t *testing.T) {
 		t.Error("NewSession with a relative directory: expected an error")
 	}
 }
+
+func TestDone(t *testing.T) {
+	code := 0
+	e := newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Exit: &code}}})
+	c := e.start(t, &recorder{})
+	select {
+	case <-c.Done():
+		t.Fatal("Done closed before the agent exited")
+	default:
+	}
+	if _, err := c.Prompt(t.Context(), "exit"); err == nil {
+		t.Fatal("Prompt: expected an error")
+	}
+	select {
+	case <-c.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Done not closed after the agent exited")
+	}
+}
