@@ -423,7 +423,11 @@ func TestPermissionWithdrawnByAgent(t *testing.T) {
 	if got := h.Text(); got != "permission: withdrawn\nafter" {
 		t.Errorf("text = %q", got)
 	}
-	if got := strings.Join(h.events, ","); got != "permission,closed,text,text" {
-		t.Errorf("events = %s, want the dialog closed before the text", got)
+	// The dialog closes when the request is withdrawn, not at the end of
+	// the turn: before "after", sent 300 ms later. Relative to the
+	// "withdrawn" text it may go either way (the renderer is paused while
+	// a dialog is open, so the terminal shows the text after it).
+	if got := strings.Join(h.events, ","); got != "permission,closed,text,text" && got != "permission,text,closed,text" {
+		t.Errorf("events = %s, want the dialog closed before the last text", got)
 	}
 }
