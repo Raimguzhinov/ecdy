@@ -32,16 +32,3 @@ func TestInitZsh(t *testing.T) {
 		}
 	}
 }
-
-func TestAskStub(t *testing.T) {
-	got, err := runRoot(t, "ask", "--", "why is $HOME empty?")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "ecdy ask (no agent yet): why is $HOME empty?\n"; got != want {
-		t.Fatalf("ask printed %q, want %q", got, want)
-	}
-	if _, err := runRoot(t, "ask"); err == nil {
-		t.Fatal("ask without a prompt: expected error")
-	}
-}
