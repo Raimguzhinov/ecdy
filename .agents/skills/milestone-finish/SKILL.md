@@ -17,10 +17,8 @@ Run every step; if one cannot be done, say so in the report instead of skipping 
 ## 2. Local checks
 
 ```sh
-nix develop -c go test -race ./...
-nix develop -c go test -race -count=20 ./shell/            # PTY tests: flakiness
-nix develop .#zsh-matrix -c go test ./...                  # CI nix job: zsh 5.8.1, 5.9, latest
-.agents/skills/ci-repro/ubuntu.sh                          # CI go job: Ubuntu's zsh build
+nix develop .#zsh-matrix -c go test -race ./...           # CI go job: zsh 5.8.1, 5.9, latest
+nix develop .#zsh-matrix -c go test -race -count=20 ./shell/   # PTY tests: flakiness
 nix develop -c golangci-lint run
 nix build && ./result/bin/ecdy version
 nix flake check
@@ -28,7 +26,8 @@ nix flake check
 
 Changed dependencies: `go mod tidy`, then refresh `vendorHash` in `flake.nix`
 (set `pkgs.lib.fakeHash`, `nix build`, copy the `got:` hash).
-Touched `shell/` or anything timing-sensitive: also `CPUS=1 .agents/skills/ci-repro/ubuntu.sh -count=10 ./shell/`.
+Touched `shell/` or anything timing-sensitive: also run the PTY tests on one CPU (the
+`ci-repro` skill, step 3).
 
 ## 3. Docs
 
