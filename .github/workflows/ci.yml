@@ -9,29 +9,27 @@ permissions:
   contents: read
 
 jobs:
+  # Code checks. Every step runs in the zsh-matrix devShell, the same
+  # environment as locally: the pinned Go toolchain and golangci-lint, and
+  # the PTY tests run against every supported zsh (nix/zsh-versions.nix).
   go:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: nix develop .#zsh-matrix -c bash -e {0}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: stable
-      - name: install zsh and plugins for the PTY tests (a distribution build of zsh)
-        run: sudo apt-get update && sudo apt-get install -y zsh zsh-syntax-highlighting zsh-autosuggestions
+      - uses: cachix/install-nix-action@v31
       - run: go vet ./...
       - run: go test -race ./...
-        env:
-          ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING: /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
-          ECDY_TEST_ZSH_AUTOSUGGESTIONS: /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
       - name: classify cold-start budget (p99 < 15 ms)
         run: go test ./cmd/ecdy -run TestClassifyColdStart -v
         env:
           ECDY_COLDSTART: "1"
       - run: go test ./internal/classify -run '^$' -fuzz FuzzClassify -fuzztime 30s
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.13
+      - run: golangci-lint run
 
+  # Packaging: the flake evaluates, and the package builds and runs.
   nix:
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +38,3 @@ jobs:
       - run: nix flake check
       - run: nix build
       - run: ./result/bin/ecdy version
-      # PTY tests against every supported zsh release (nix/zsh-versions.nix);
-      # the go job covers a distribution-built zsh from apt.
-      - run: nix develop .#zsh-matrix -c go test ./...
