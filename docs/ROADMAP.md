@@ -22,7 +22,7 @@ Permission dialog, Ctrl+C → cancel.
 manual check with claude-agent-acp and codex-acp, results recorded in STATUS.md
 (codex-acp could not be checked: no network access to its backend here; see STATUS.md).
 
-**M4 — Daemon and continuity.** One daemon per session (`ECDY_SESSION` is exported by the plugin), lazy start, unix socket 0700,
+**M4 — Daemon and continuity.** ✅ One daemon per session (`ECDY_SESSION` is exported by the plugin), lazy start, unix socket 0700,
 shutdown on `zshexit` and idle timeout. The conversation continues across prompts. `ecdy new` — a new ACP session,
 `ecdy use <agent>` — switch agents.
 *DoD:* the second prompt sees the context of the first (test with the fake agent); no orphaned processes after the shell exits (test);

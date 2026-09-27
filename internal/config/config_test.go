@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, content string) string {
@@ -59,6 +60,9 @@ func TestLoadErrors(t *testing.T) {
 		"unknown field": "default_agnet = \"x\"\n",
 		"empty command": "[agents.x]\ncommand = []\n",
 		"empty argv0":   "[agents.x]\ncommand = [\"\"]\n",
+		"idle number":   "idle_timeout = 30\n",
+		"idle unit":     "idle_timeout = \"30\"\n",
+		"idle negative": "idle_timeout = \"-1m\"\n",
 	}
 	for name, content := range tests {
 		if _, err := Load(write(t, content)); err == nil {
@@ -83,5 +87,17 @@ func TestPath(t *testing.T) {
 	t.Setenv("HOME", "/home/u")
 	if p, _ := Path(); p != "/home/u/.config/ecdy/config.toml" {
 		t.Errorf("Path() with relative XDG_CONFIG_HOME = %q", p)
+	}
+}
+
+func TestIdleTimeout(t *testing.T) {
+	if d := Default().IdleTimeout; d != 30*time.Minute {
+		t.Errorf("default idle timeout = %v", d)
+	}
+	for text, want := range map[string]time.Duration{"0s": 0, "90s": 90 * time.Second, "2h": 2 * time.Hour} {
+		c, err := Load(write(t, "idle_timeout = \""+text+"\"\n"))
+		if err != nil || c.IdleTimeout != want {
+			t.Errorf("idle_timeout = %q: %v, %v; want %v", text, c.IdleTimeout, err, want)
+		}
 	}
 }

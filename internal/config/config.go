@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -24,7 +25,17 @@ type Agent struct {
 
 // Config is the user's configuration.
 type Config struct {
+	DefaultAgent string
+	Agents       map[string]Agent
+	// IdleTimeout is how long a shell session's daemon keeps its agents
+	// without a prompt (docs/adr/0003-session-daemon.md).
+	IdleTimeout time.Duration
+}
+
+// file is the layout of config.toml.
+type file struct {
 	DefaultAgent string           `toml:"default_agent"`
+	IdleTimeout  string           `toml:"idle_timeout"`
 	Agents       map[string]Agent `toml:"agents"`
 }
 
@@ -40,6 +51,7 @@ func Default() Config {
 			"gemini":   {Command: []string{"gemini", "--acp"}},
 			"opencode": {Command: []string{"opencode", "acp"}},
 		},
+		IdleTimeout: 30 * time.Minute,
 	}
 }
 
@@ -69,13 +81,20 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return c, fmt.Errorf("read config: %w", err)
 	}
-	var file Config
+	var file file
 	dec := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 	if err := dec.Decode(&file); err != nil {
 		return c, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if file.DefaultAgent != "" {
 		c.DefaultAgent = file.DefaultAgent
+	}
+	if file.IdleTimeout != "" {
+		d, err := time.ParseDuration(file.IdleTimeout)
+		if err != nil || d < 0 {
+			return c, fmt.Errorf("%s: idle_timeout: %q is not a duration like \"30m\"", path, file.IdleTimeout)
+		}
+		c.IdleTimeout = d
 	}
 	for name, a := range file.Agents {
 		if len(a.Command) == 0 || a.Command[0] == "" {

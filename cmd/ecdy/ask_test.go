@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -33,13 +36,33 @@ const (
 	esc   = "\x1b"
 )
 
-type askEnv struct {
-	dir    string // working directory and $HOME
-	record string // requests the fake agent received
-	env    []string
+// mode is how `ecdy ask` runs the agent.
+type mode string
+
+const (
+	oneShot    mode = "one-shot" // no ECDY_SESSION: a server in the process
+	withDaemon mode = "daemon"   // the session's daemon
+)
+
+// forEachMode runs test as a subtest in both modes.
+func forEachMode(t *testing.T, test func(t *testing.T, m mode)) {
+	t.Helper()
+	for _, m := range []mode{oneShot, withDaemon} {
+		t.Run(string(m), func(t *testing.T) { test(t, m) })
+	}
 }
 
-func newAskEnv(t *testing.T, s fakeagent.Script) *askEnv {
+type askEnv struct {
+	dir     string // working directory and $HOME
+	record  string // requests the fake agent received
+	runtime string // $XDG_RUNTIME_DIR in daemon mode
+	env     []string
+}
+
+// session is ECDY_SESSION in daemon mode.
+const session = "test-session"
+
+func newAskEnv(t *testing.T, m mode, s fakeagent.Script) *askEnv {
 	t.Helper()
 	dir := t.TempDir()
 	e := &askEnv{dir: dir, record: filepath.Join(dir, "record.jsonl")}
@@ -69,7 +92,78 @@ func newAskEnv(t *testing.T, s fakeagent.Script) *askEnv {
 		"TERM=xterm",
 		"LANG=C.UTF-8",
 	}
+	if m == oneShot {
+		// The agent does not outlive `ecdy ask`.
+		t.Cleanup(func() { waitGone(t, e.agentPids(t)...) })
+	}
+	if m == withDaemon {
+		// Not t.TempDir(): a unix socket path must be short.
+		rt, err := os.MkdirTemp("", "ecdy-rt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.runtime = rt
+		e.env = append(e.env, "XDG_RUNTIME_DIR="+rt, "ECDY_SESSION="+session)
+		t.Cleanup(func() {
+			e.stopDaemon(t)
+			_ = os.RemoveAll(rt)
+		})
+	}
 	return e
+}
+
+// ecdy runs the ecdy subcommand args without a terminal and returns its
+// output.
+func (e *askEnv) ecdy(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	self, _ := os.Executable()
+	cmd := exec.Command(self, args...)
+	cmd.Dir = e.dir
+	cmd.Env = e.env
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// stopDaemon stops the session's daemon and checks that no agent process
+// the test started is left.
+func (e *askEnv) stopDaemon(t *testing.T) {
+	t.Helper()
+	if out, err := e.ecdy(t, "daemon", "stop"); err != nil {
+		t.Errorf("ecdy daemon stop: %v\n%s", err, out)
+	}
+	waitGone(t, e.agentPids(t)...)
+}
+
+// agentPids returns the pids of the agent processes that received requests.
+func (e *askEnv) agentPids(t *testing.T) []int {
+	t.Helper()
+	reqs, err := fakeagent.ReadRecord(e.record)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	var pids []int
+	for _, r := range reqs {
+		if !slices.Contains(pids, r.Pid) {
+			pids = append(pids, r.Pid)
+		}
+	}
+	return pids
+}
+
+// waitGone waits until the processes pids no longer exist (zombies count
+// as gone: they are not our children, init reaps them).
+func waitGone(t *testing.T, pids ...int) {
+	t.Helper()
+	deadline := time.Now().Add(testutil.DefaultTimeout)
+	for _, pid := range pids {
+		for testutil.Alive(pid) {
+			if time.Now().After(deadline) {
+				t.Errorf("process %d is still running", pid)
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 }
 
 func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"` }
@@ -108,8 +202,10 @@ func expectExit(t *testing.T, term *testutil.Term, want int) {
 	}
 }
 
-func TestAskStreaming(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{Turn: []fakeagent.Step{
+func TestAskStreaming(t *testing.T) { forEachMode(t, testAskStreaming) }
+
+func testAskStreaming(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{
 		{Text: "Let me look"},
 		{Text: " at it."},
 		{Tool: &fakeagent.Tool{ID: "t1", Title: "Read main.go", Kind: "read"}},
@@ -130,7 +226,9 @@ func TestAskStreaming(t *testing.T) {
 	expectExit(t, term, 0)
 }
 
-func TestAskPermission(t *testing.T) {
+func TestAskPermission(t *testing.T) { forEachMode(t, testAskPermission) }
+
+func testAskPermission(t *testing.T, m mode) {
 	tests := []struct {
 		name, key, want string
 	}{
@@ -141,7 +239,7 @@ func TestAskPermission(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := newAskEnv(t, fakeagent.Script{Turn: []fakeagent.Step{
+			e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{
 				{Text: "cleaning"},
 				{Permission: &fakeagent.Tool{ID: "t1", Title: "rm -rf build", Kind: "execute"}},
 			}})
@@ -160,8 +258,10 @@ func TestAskPermission(t *testing.T) {
 }
 
 // Keys typed before the dialog appeared do not answer it.
-func TestAskPermissionTypeahead(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{Turn: []fakeagent.Step{
+func TestAskPermissionTypeahead(t *testing.T) { forEachMode(t, testAskPermissionTypeahead) }
+
+func testAskPermissionTypeahead(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{
 		{Text: "thinking"},
 		{SleepMS: 500},
 		{Permission: &fakeagent.Tool{ID: "t1", Title: "rm -rf build"}},
@@ -176,8 +276,10 @@ func TestAskPermissionTypeahead(t *testing.T) {
 	expectExit(t, term, 0)
 }
 
-func TestAskCtrlCInPermission(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Permission: &fakeagent.Tool{ID: "t1", Title: "rm -rf build"}}}})
+func TestAskCtrlCInPermission(t *testing.T) { forEachMode(t, testAskCtrlCInPermission) }
+
+func testAskCtrlCInPermission(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{{Permission: &fakeagent.Tool{ID: "t1", Title: "rm -rf build"}}}})
 	term := e.start(t, "clean")
 	term.Expect("^C cancel")
 	term.Send(ctrlC)
@@ -186,8 +288,10 @@ func TestAskCtrlCInPermission(t *testing.T) {
 	expectExit(t, term, 130)
 }
 
-func TestAskCancel(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Text: "working"}, {WaitCancel: true}}})
+func TestAskCancel(t *testing.T) { forEachMode(t, testAskCancel) }
+
+func testAskCancel(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{{Text: "working"}, {WaitCancel: true}}})
 	term := e.start(t, "wait")
 	term.Expect("working")
 	term.Send(ctrlC)
@@ -200,8 +304,10 @@ func TestAskCancel(t *testing.T) {
 }
 
 // An agent that ignores session/cancel is stopped by the second Ctrl+C.
-func TestAskSecondCtrlC(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{IgnoreTerm: true, Turn: []fakeagent.Step{{Text: "working"}, {Hang: true}}})
+func TestAskSecondCtrlC(t *testing.T) { forEachMode(t, testAskSecondCtrlC) }
+
+func testAskSecondCtrlC(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{IgnoreTerm: true, Turn: []fakeagent.Step{{Text: "working"}, {Hang: true}}})
 	term := e.start(t, "wait")
 	term.Expect("working")
 	term.Send(ctrlC)
@@ -215,8 +321,10 @@ func TestAskSecondCtrlC(t *testing.T) {
 }
 
 // Ctrl+C before the agent answered initialize.
-func TestAskCtrlCAtStart(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{})
+func TestAskCtrlCAtStart(t *testing.T) { forEachMode(t, testAskCtrlCAtStart) }
+
+func testAskCtrlCAtStart(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{})
 	cfg := filepath.Join(e.dir, "config", "ecdy", "config.toml")
 	if err := os.WriteFile(cfg, []byte("default_agent = \"mute\"\n[agents.mute]\ncommand = [\"sleep\", \"60\"]\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -227,9 +335,11 @@ func TestAskCtrlCAtStart(t *testing.T) {
 	expectExit(t, term, 130)
 }
 
-func TestAskAgentCrash(t *testing.T) {
+func TestAskAgentCrash(t *testing.T) { forEachMode(t, testAskAgentCrash) }
+
+func testAskAgentCrash(t *testing.T, m mode) {
 	code := 3
-	e := newAskEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Text: "partial"}, {Stderr: "panic: boom\n"}, {Exit: &code}}})
+	e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{{Text: "partial"}, {Stderr: "panic: boom\n"}, {Exit: &code}}})
 	term := e.start(t, "crash")
 	term.Expect("partial")
 	term.Expect("ecdy: fake: agent exited: exit status 3")
@@ -237,23 +347,29 @@ func TestAskAgentCrash(t *testing.T) {
 	expectExit(t, term, 1)
 }
 
-func TestAskAuthRequired(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{AuthRequired: true})
+func TestAskAuthRequired(t *testing.T) { forEachMode(t, testAskAuthRequired) }
+
+func testAskAuthRequired(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{AuthRequired: true})
 	term := e.start(t, "hello")
 	term.Expect("fake: agent requires authentication (Log in with a browser; Log in in a terminal)")
 	term.Expect("log in with the agent's own CLI")
 	expectExit(t, term, 1)
 }
 
-func TestAskUnknownAgent(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{})
+func TestAskUnknownAgent(t *testing.T) { forEachMode(t, testAskUnknownAgent) }
+
+func testAskUnknownAgent(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{})
 	term := e.start(t, "--agent", "nope", "hello")
 	term.Expect(`unknown agent "nope"`)
 	expectExit(t, term, 1)
 }
 
-func TestAskAgentNotFound(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{})
+func TestAskAgentNotFound(t *testing.T) { forEachMode(t, testAskAgentNotFound) }
+
+func testAskAgentNotFound(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{})
 	cfg := filepath.Join(e.dir, "config", "ecdy", "config.toml")
 	if err := os.WriteFile(cfg, []byte("[agents.gone]\ncommand = [\"no-such-agent-ecdy\"]\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -265,8 +381,10 @@ func TestAskAgentNotFound(t *testing.T) {
 
 // Without a controlling terminal nothing can be allowed: the request is
 // rejected, and the output (a pipe) has no escape sequences.
-func TestAskNoTerminal(t *testing.T) {
-	e := newAskEnv(t, fakeagent.Script{Turn: []fakeagent.Step{
+func TestAskNoTerminal(t *testing.T) { forEachMode(t, testAskNoTerminal) }
+
+func testAskNoTerminal(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{
 		{Tool: &fakeagent.Tool{ID: "t1", Title: "Read main.go"}},
 		{ToolDone: &fakeagent.Tool{ID: "t1", Status: "completed"}},
 		{Permission: &fakeagent.Tool{ID: "t2", Title: "rm -rf build"}},

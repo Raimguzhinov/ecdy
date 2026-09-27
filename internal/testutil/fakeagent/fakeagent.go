@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -51,6 +52,9 @@ type Script struct {
 	// agent never sends $/cancel_request for them (an unstable part of the
 	// protocol that not every agent implements).
 	NoCancelRequest bool `json:"no_cancel_request,omitempty"`
+	// ExitDelayMS delays the exit after stdin is closed, as a slow agent
+	// shutting down would.
+	ExitDelayMS int `json:"exit_delay_ms,omitempty"`
 	// Record, if set, is a file the agent appends every request it receives
 	// to, one JSON object ({"method": ..., "params": ...}) per line.
 	Record string `json:"record,omitempty"`
@@ -60,8 +64,12 @@ type Script struct {
 
 // Step is one action of a prompt turn. Exactly one field is set.
 type Step struct {
-	Text    string `json:"text,omitempty"`    // agent_message_chunk
-	Echo    bool   `json:"echo,omitempty"`    // the prompt's text and "\n" as a chunk
+	Text string `json:"text,omitempty"` // agent_message_chunk
+	Echo bool   `json:"echo,omitempty"` // the prompt's text and "\n" as a chunk
+	// History sends "history: " and the prompts of this session so far,
+	// this one included, joined by " | ", and "\n": what the agent
+	// remembers of the conversation.
+	History bool   `json:"history,omitempty"`
 	Thought string `json:"thought,omitempty"` // agent_thought_chunk
 	Stderr  string `json:"stderr,omitempty"`  // written to stderr
 	Raw     string `json:"raw,omitempty"`     // written to stdout as one line, bypassing the SDK
@@ -76,6 +84,10 @@ type Step struct {
 	// "permission: <option id or cancelled>\n". A cancelled outcome ends the
 	// turn with stop reason cancelled.
 	Permission *Tool `json:"permission,omitempty"`
+	// WithdrawMS, with Permission, withdraws the request ($/cancel_request)
+	// if it is not answered within that many milliseconds; the agent then
+	// sends "permission: withdrawn\n" and goes on with the turn.
+	WithdrawMS int `json:"withdraw_ms,omitempty"`
 	// WaitCancel blocks until session/cancel and ends the turn with stop
 	// reason cancelled.
 	WaitCancel bool `json:"wait_cancel,omitempty"`
@@ -117,10 +129,11 @@ func Main() {
 	if s.IgnoreTerm {
 		signal.Ignore(syscall.SIGTERM)
 	}
-	a := &agent{script: s, cancel: make(chan struct{})}
+	a := &agent{script: s}
 	a.conn = acp.NewAgentSideConnection(a, os.Stdout, os.Stdin)
 	a.conn.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	<-a.conn.Done()
+	time.Sleep(time.Duration(s.ExitDelayMS) * time.Millisecond)
 	os.Exit(0)
 }
 
@@ -149,6 +162,7 @@ func WriteScript(dir string, s Script) (string, error) {
 type Request struct {
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
+	Pid    int             `json:"pid"` // of the agent process that received it
 }
 
 // ReadRecord reads the requests recorded to path.
@@ -175,9 +189,12 @@ type agent struct {
 	script Script
 	conn   *acp.AgentSideConnection
 
-	recordMu   sync.Mutex
-	cancelOnce sync.Once
-	cancel     chan struct{} // closed by session/cancel
+	recordMu sync.Mutex
+
+	mu       sync.Mutex
+	cancel   chan struct{}              // of the current turn; closed by session/cancel
+	sessions int                        // session/new calls so far
+	history  map[acp.SessionId][]string // the prompts of each session
 }
 
 var _ acp.Agent = (*agent)(nil)
@@ -187,7 +204,7 @@ func (a *agent) record(method string, params any) {
 		return
 	}
 	p, _ := json.Marshal(params)
-	line, _ := json.Marshal(Request{Method: method, Params: p})
+	line, _ := json.Marshal(Request{Method: method, Params: p, Pid: os.Getpid()})
 	a.recordMu.Lock()
 	defer a.recordMu.Unlock()
 	f, err := os.OpenFile(a.script.Record, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
@@ -219,31 +236,54 @@ func (a *agent) NewSession(_ context.Context, p acp.NewSessionRequest) (acp.NewS
 	if a.script.AuthRequired {
 		return acp.NewSessionResponse{}, acp.NewAuthRequired(nil)
 	}
-	return acp.NewSessionResponse{SessionId: "fake-session"}, nil
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sessions++
+	return acp.NewSessionResponse{SessionId: acp.SessionId(fmt.Sprintf("fake-session-%d", a.sessions))}, nil
 }
 
 func (a *agent) Cancel(_ context.Context, p acp.CancelNotification) error {
 	a.record(acp.AgentMethodSessionCancel, p)
-	a.cancelOnce.Do(func() { close(a.cancel) })
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cancel == nil {
+		return nil // no turn yet
+	}
+	select {
+	case <-a.cancel:
+	default:
+		close(a.cancel)
+	}
 	return nil
 }
 
 func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
 	a.record(acp.AgentMethodSessionPrompt, p)
 	stop := func(r acp.StopReason) (acp.PromptResponse, error) { return acp.PromptResponse{StopReason: r}, nil }
+	var text string
+	for _, b := range p.Prompt {
+		if b.Text != nil {
+			text += b.Text.Text
+		}
+	}
+	a.mu.Lock()
+	if a.history == nil {
+		a.history = map[acp.SessionId][]string{}
+	}
+	a.history[p.SessionId] = append(a.history[p.SessionId], text)
+	history := strings.Join(a.history[p.SessionId], " | ")
+	cancel := make(chan struct{})
+	a.cancel = cancel
+	a.mu.Unlock()
 	for _, s := range a.script.Turn {
 		var err error
 		switch {
 		case s.Text != "":
 			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText(s.Text))
 		case s.Echo:
-			var text string
-			for _, b := range p.Prompt {
-				if b.Text != nil {
-					text += b.Text.Text
-				}
-			}
 			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText(text+"\n"))
+		case s.History:
+			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText("history: "+history+"\n"))
 		case s.Thought != "":
 			err = a.update(ctx, p.SessionId, acp.UpdateAgentThoughtText(s.Thought))
 		case s.Raw != "":
@@ -266,6 +306,10 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 			if a.script.NoCancelRequest {
 				rctx = context.WithoutCancel(ctx)
 			}
+			withdraw := context.CancelFunc(func() {})
+			if s.WithdrawMS > 0 {
+				rctx, withdraw = context.WithTimeout(rctx, time.Duration(s.WithdrawMS)*time.Millisecond)
+			}
 			var res acp.RequestPermissionResponse
 			res, err = a.conn.RequestPermission(rctx, acp.RequestPermissionRequest{
 				SessionId: p.SessionId,
@@ -280,8 +324,14 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 					{OptionId: OptReject, Name: "Reject", Kind: acp.PermissionOptionKindRejectOnce},
 				},
 			})
+			withdrawn := rctx.Err() != nil
+			withdraw()
 			// The SDK cancels ctx on session/cancel, which also fails a
 			// pending permission request.
+			if err != nil && s.WithdrawMS > 0 && ctx.Err() == nil && withdrawn {
+				err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText("permission: withdrawn\n"))
+				break
+			}
 			if err != nil && ctx.Err() == nil {
 				return acp.PromptResponse{}, fmt.Errorf("request permission: %w", err)
 			}
@@ -294,10 +344,10 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 				return stop(acp.StopReasonCancelled)
 			}
 		case s.WaitCancel:
-			<-a.cancel
+			<-cancel
 			return stop(acp.StopReasonCancelled)
 		case s.AwaitCancel:
-			<-a.cancel
+			<-cancel
 		case s.Hang:
 			select {}
 		case s.Exit != nil:

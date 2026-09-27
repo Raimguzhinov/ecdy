@@ -1,6 +1,80 @@
 # Status
 
-## Current milestone: M3 — ACP one-shot
+## Current milestone: M4 — daemon and continuity
+
+### Done
+
+- ADR 0003: one daemon per shell session keeps the agents alive (answers open questions 1 and 2).
+- `internal/daemon`:
+  - `Server`: one agent process per agent name, its ACP session is the conversation. The agent is
+    started at its first prompt (`acpclient.Start` in the prompt's cwd); `ecdy new` bumps a
+    generation in the session state and the next prompt runs `session/new` on the same process;
+    an agent that died between prompts is restarted with a notice. One turn per agent at a time
+    (`busy`). A client that disconnects mid-turn cancels it; if the turn has not ended after
+    `CancelGrace` (5 s) the agent is killed. The turn is marked ended before the last message is
+    sent, so a client closing right after it is not mistaken for one that left.
+  - Protocol (`proto.go`): one request per connection, newline-delimited JSON, ACP SDK types as
+    payloads, protocol version (a mismatch makes `ecdy ask` stop the old daemon and start a new
+    one). Updates and permission requests reach the client in the agent's order; a withdrawn
+    request closes the dialog at once, not at the end of the turn.
+  - `Run`: `$XDG_RUNTIME_DIR/ecdy` (or `$TMPDIR/ecdy-<uid>`), checked 0700, owned, not a symlink;
+    `flock` on the directory while checking for a live daemon and binding; socket 0600, removed
+    only if it is still ours. Stops on `stop`, SIGTERM/SIGINT/SIGHUP, idle timeout (`idle_timeout`,
+    default 30m, `0s` = right after the last client, at least 10 s for the first client), and
+    when `ECDY_SHELL_PID` is gone (checked every 500 ms; then the state file is removed too).
+  - Client: `Connect` spawns `ecdy daemon` detached (setsid, stdio /dev/null, cwd /) and waits up
+    to 5 s for a readiness line on fd 3; `Stop`, `GetStatus`, `Turn`.
+- `ecdy ask` is a client of that server: the session's daemon with `ECDY_SESSION`, an in-process
+  server over `net.Pipe` without it (M3 behaviour, same code path). Second Ctrl+C → `kill`.
+- `ecdy daemon` (hidden `--ready-fd`), `ecdy daemon stop [--no-wait]`, `ecdy daemon status`,
+  `ecdy use [AGENT]`, `ecdy new`. `use`/`new` only rewrite `<session>.state` (atomically).
+- `acpclient`: `NewSession`, `Session`, `Done`. `config`: `idle_timeout`.
+- Plugin: exports `ECDY_SESSION` (`<pid>-<time>`, fresh in every shell, nested ones too) and
+  `ECDY_SHELL_PID`; `zshexit` runs `ecdy daemon stop --no-wait --end-session`.
+- Fake agent: history per session, unique session ids, pid in the record, per-turn cancel,
+  `WithdrawMS`, `ExitDelayMS`. `testutil.Alive`, `Term.Output`, `Term.Pid`.
+- Tests:
+  - every M3 `ecdy ask` test runs in both modes (one-shot and daemon); after each, no agent
+    process is left;
+  - `cmd/ecdy/daemon_test.go`: continuity (agent started once), one-shot forgets, `new`, `use` and
+    `--agent` (each agent keeps its conversation), busy, client killed mid-turn, agent died
+    between prompts, cwd notice, `daemon stop` (waits for a slow agent), shell gone (daemon,
+    agents and state file), idle timeout `0s` and `5s`, protocol version mismatch, unsafe runtime
+    directory;
+  - `internal/daemon`: turns continue, stderr of verbose turns, client gone with `CancelGrace`
+    0 / 300 ms / an agent that stops, permission answer / interrupt / withdraw by cancel /
+    withdraw by the agent, busy, protocol version, silent client, oversized message, idle timer
+    0 and 50 ms, runtime directory and state files;
+  - `shell/session_test.go` (PTY, zsh): a conversation across prompts with `ecdy new` and
+    `ecdy use`; no daemon or agent left after `exit` (zshexit only: pid watching off) or SIGKILL
+    of the shell; session variables in children and nested shells. Every test shell's daemons
+    are stopped in its cleanup.
+  - 19 mutations of the code, each caught by the tests above (one survived at first — `stop`
+    returning without waiting; the fake agent now exits slowly in that test).
+
+### Verified locally (2026-09-28)
+
+- `nix develop -c go test -race ./cmd/ecdy/ ./internal/...` — green (1:46);
+  `nix develop .#zsh-matrix -c go test -race -count=20 ./shell/` (zsh 5.8.1, 5.9, 5.9.2) — green (3:00);
+  on one CPU (`taskset -c 0`): `./shell/ ./internal/daemon/` ×3 and `./cmd/ecdy/` — green after
+  fixing `TestPermissionWithdrawnByAgent`, which assumed an order that one CPU does not keep;
+  `golangci-lint run` — 0 issues; `nix build` (`ecdy e9713a9`), `nix flake check` — ok.
+  No `ecdy daemon` or agent process left after any run.
+- Manual check with claude-agent-acp (npx) through the daemon: "remember 7481" (4 s, agent
+  start-up included), then "what number?" → `7481` (1 s); `ecdy daemon status` showed the agent
+  and its ACP session; `ecdy daemon stop` left no process.
+- Mutation check: 19 deliberate breakages of the new code, each run alone with
+  `go test -timeout=60s`; all caught.
+
+### Known limitations
+
+- The agent keeps the environment of the `ecdy ask` that started the daemon.
+- A shell replaced by `exec` keeps its pid and skips zshexit: only the idle timeout stops its daemon.
+- `session/load` is not used: the conversation ends with the daemon (idle timeout, shell exit).
+- Two concurrent `ecdy use`/`ecdy new` may race on the state file (last write wins).
+- No session context in the prompt yet (M5).
+
+## Done: M3 — ACP one-shot
 
 ### Done
 
@@ -67,8 +141,7 @@
 
 ### Known limitations
 
-- One prompt = one agent process and one session: no conversation continuity, npx start-up on
-  every prompt (~10 s for claude). M4.
+- One prompt = one agent process and one session (fixed in M4).
 - No session context in the prompt (M5); no `fs/*`, `terminal/*` capabilities (M6).
 - Markdown is printed raw (M7).
 - "Always allow" is stored by the agent; ecdy has no policy of its own (open question 4) and no
@@ -159,7 +232,7 @@
 - `ECDY_SESSION` is not exported yet (M4).
 - `TestFirstKind` uses `/usr/bin:/bin` as `$PATH`, so it expects `ls` and `/bin/sh` there.
 
-## Next: M4 — daemon and continuity
+## Next: M5 — session context
 
-See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m4-daemon`.
-First task: the daemon model ADR (AGENTS.md section 8, open question 2).
+See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m5-context`.
+First task: the secret redactor's test table (tests first, AGENTS.md section 8).

@@ -244,3 +244,14 @@ var ansi = regexp.MustCompile(`\x1b(\[[0-9;?]*[ -/]*[@-~]|\][^\x07]*\x07|[()][0-
 func Printable(s string) string {
 	return strings.ReplaceAll(ansi.ReplaceAllString(s, ""), "\r", "")
 }
+
+// Output returns everything the process printed so far, without escape
+// sequences.
+func (t *Term) Output() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return Printable(t.out.String())
+}
+
+// Pid returns the process id.
+func (t *Term) Pid() int { return t.cmd.Process.Pid }

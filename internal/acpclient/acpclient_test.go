@@ -614,3 +614,62 @@ func zombie(pid int) bool {
 	i := strings.LastIndexByte(string(stat), ')')
 	return i >= 0 && strings.HasPrefix(string(stat[i+1:]), " Z")
 }
+
+// Turns on one Conn continue the conversation; NewSession starts a new one
+// in the given directory, and the updates of the old session are ignored.
+func TestNewSession(t *testing.T) {
+	e := newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{History: true}}})
+	h := &recorder{}
+	c := e.start(t, h)
+	first := c.Session()
+	for _, p := range []string{"one", "two"} {
+		if stop, err := c.Prompt(t.Context(), p); err != nil || stop != acp.StopReasonEndTurn {
+			t.Fatalf("Prompt(%q) = %q, %v", p, stop, err)
+		}
+	}
+	sub := filepath.Join(e.dir, "sub")
+	if err := c.NewSession(t.Context(), sub); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if c.Session() == first {
+		t.Errorf("session id %q did not change", first)
+	}
+	if stop, err := c.Prompt(t.Context(), "three"); err != nil || stop != acp.StopReasonEndTurn {
+		t.Fatalf("Prompt = %q, %v", stop, err)
+	}
+	if got, want := h.Text(), "history: one\nhistory: one | two\nhistory: three\n"; got != want {
+		t.Errorf("text = %q, want %q", got, want)
+	}
+	reqs, _ := fakeagent.ReadRecord(e.record)
+	var news []string
+	for _, r := range reqs {
+		if r.Method == "session/new" {
+			news = append(news, string(r.Params))
+		}
+	}
+	if len(news) != 2 || !strings.Contains(news[1], `"cwd":"`+sub+`"`) {
+		t.Errorf("session/new requests = %v", news)
+	}
+	if err := c.NewSession(t.Context(), "rel"); err == nil {
+		t.Error("NewSession with a relative directory: expected an error")
+	}
+}
+
+func TestDone(t *testing.T) {
+	code := 0
+	e := newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Exit: &code}}})
+	c := e.start(t, &recorder{})
+	select {
+	case <-c.Done():
+		t.Fatal("Done closed before the agent exited")
+	default:
+	}
+	if _, err := c.Prompt(t.Context(), "exit"); err == nil {
+		t.Fatal("Prompt: expected an error")
+	}
+	select {
+	case <-c.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Done not closed after the agent exited")
+	}
+}
