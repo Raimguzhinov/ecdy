@@ -30,24 +30,39 @@ func TestMain(m *testing.M) {
 
 // setupAgent writes the ecdy config and the fake agent's script to dir.
 func setupAgent(dir string) error {
+	env, err := agentConfig(dir, []namedScript{{"fake", fakeagent.Script{Turn: []fakeagent.Step{{Text: askReply}, {Echo: true}}}}})
+	agentEnv = env
+	return err
+}
+
+type namedScript struct {
+	name   string
+	script fakeagent.Script
+}
+
+// agentConfig writes an ecdy config to dir with the given fake agents, the
+// first one the default, and returns the environment that selects it.
+func agentConfig(dir string, agents []namedScript) ([]string, error) {
 	self, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("find the test binary: %w", err)
+		return nil, fmt.Errorf("find the test binary: %w", err)
 	}
-	scriptEnv, err := fakeagent.WriteScript(dir, fakeagent.Script{Turn: []fakeagent.Step{{Text: askReply}, {Echo: true}}})
-	if err != nil {
-		return err
+	cfg := fmt.Sprintf("default_agent = %q\n", agents[0].name)
+	for _, a := range agents {
+		scriptEnv, err := fakeagent.WriteScript(dir, a.script)
+		if err != nil {
+			return nil, err
+		}
+		cfg += fmt.Sprintf("[agents.%s]\ncommand = [\"env\", %q, %q, \"fake-agent\"]\n", a.name, scriptEnv, self)
 	}
 	cfgDir := filepath.Join(dir, "config")
 	if err := os.MkdirAll(filepath.Join(cfgDir, "ecdy"), 0o700); err != nil {
-		return fmt.Errorf("config directory: %w", err)
+		return nil, fmt.Errorf("config directory: %w", err)
 	}
-	cfg := fmt.Sprintf("default_agent = \"fake\"\n[agents.fake]\ncommand = [%q, \"fake-agent\"]\n", self)
 	if err := os.WriteFile(filepath.Join(cfgDir, "ecdy", "config.toml"), []byte(cfg), 0o600); err != nil {
-		return fmt.Errorf("write config: %w", err)
+		return nil, fmt.Errorf("write config: %w", err)
 	}
-	agentEnv = []string{"XDG_CONFIG_HOME=" + cfgDir, scriptEnv}
-	return nil
+	return []string{"XDG_CONFIG_HOME=" + cfgDir}, nil
 }
 
 func run(m *testing.M) int {
@@ -89,12 +104,16 @@ type zshOpts struct {
 	rc, load, after string
 	// path is $PATH; the default puts the test ecdy binary first.
 	path string
+	// agent replaces agentEnv: the environment that points ecdy at the fake
+	// agent (see agentConfig).
+	agent []string
 }
 
 type zshTerm struct {
 	*testutil.Term
-	t    *testing.T
-	home string // $HOME and the working directory
+	t       *testing.T
+	home    string // $HOME and the working directory
+	runtime string // $XDG_RUNTIME_DIR: the daemons' sockets
 }
 
 // startZsh starts `zsh -f -i` under a PTY in a temporary $HOME and loads the
@@ -126,6 +145,22 @@ func startZsh(t *testing.T, zsh string, o zshOpts) *zshTerm {
 	if err := os.WriteFile(rcPath, []byte(rc+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Not t.TempDir(): a unix socket path must be short.
+	runtime, err := os.MkdirTemp("", "ecdy-rt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// The shell is killed without zshexit. Its daemons would stop on
+		// their own once it is gone, unless a test switched that off
+		// (ECDY_SHELL_PID=0): stop them explicitly.
+		stopDaemons(t, runtime)
+		waitNoSockets(t, runtime)
+		_ = os.RemoveAll(runtime)
+	})
+	if o.agent == nil {
+		o.agent = agentEnv
+	}
 	cmd := exec.Command(zsh, "-f", "-i")
 	cmd.Dir = home
 	cmd.Env = append([]string{
@@ -134,8 +169,9 @@ func startZsh(t *testing.T, zsh string, o zshOpts) *zshTerm {
 		"TERM=xterm",
 		"LANG=C.UTF-8",
 		"LC_ALL=C.UTF-8",
-	}, agentEnv...)
-	z := &zshTerm{Term: testutil.StartTerm(t, cmd), t: t, home: home}
+		"XDG_RUNTIME_DIR=" + runtime,
+	}, o.agent...)
+	z := &zshTerm{Term: testutil.StartTerm(t, cmd), t: t, home: home, runtime: runtime}
 	z.Diag = func() string {
 		var b strings.Builder
 		b.WriteString("files in $HOME:\n")

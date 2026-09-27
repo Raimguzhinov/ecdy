@@ -16,6 +16,11 @@
 # Settings (set before loading):
 #   ECDY_BIN               ecdy executable (default: `ecdy` from $PATH)
 #   ECDY_CLASSIFY_TIMEOUT  classification deadline in seconds (default: 0.5)
+#
+# Every shell that loads the plugin is a session: it exports ECDY_SESSION and
+# ECDY_SHELL_PID, so that `ecdy ask` talks to this session's daemon and the
+# conversation continues across prompts. The daemon is started by the first
+# prompt and stopped by the zshexit hook (docs/adr/0003-session-daemon.md).
 
 [[ -o interactive ]] || return 0
 # Oldest supported zsh; on older ones Enter stays vanilla (fail-open).
@@ -29,6 +34,12 @@ is-at-least 5.8 || return 0
 zmodload zsh/system 2>/dev/null
 zmodload zsh/parameter 2>/dev/null
 zmodload zsh/zselect 2>/dev/null
+zmodload zsh/datetime 2>/dev/null
+
+# A new session for every shell, also one started from a shell with ecdy:
+# the pid and the start time make the id unique on this machine.
+export ECDY_SESSION="$$-${${EPOCHREALTIME:-$SECONDS}//[^0-9]/}"
+export ECDY_SHELL_PID=$$
 
 typeset -g _ECDY_ORIG=''      # the line the user typed, for zshaddhistory
 typeset -g _ECDY_REWRITTEN='' # what accept-line actually ran instead
@@ -231,6 +242,16 @@ _ecdy_zshaddhistory() {
   return 1
 }
 
+# Stop the session's daemon and its agents when the shell exits. --no-wait:
+# exiting never waits for the agents. The daemon also stops by itself once
+# this shell's pid is gone (a shell killed without zshexit).
+_ecdy_zshexit() {
+  local bin=${ECDY_BIN:-ecdy}
+  whence -p -- $bin >/dev/null 2>&1 || return 0
+  command $bin daemon stop --no-wait --end-session >/dev/null 2>&1
+  return 0
+}
+
 _ecdy_precmd() {
   [[ -n $_ECDY_HISTORY_PENDING ]] || return 0
   print -sr -- $_ECDY_HISTORY_PENDING
@@ -248,3 +269,4 @@ bindkey -M viins '^[^M' ecdy-force-command
 autoload -Uz add-zsh-hook
 add-zsh-hook zshaddhistory _ecdy_zshaddhistory
 add-zsh-hook precmd _ecdy_precmd
+add-zsh-hook zshexit _ecdy_zshexit
