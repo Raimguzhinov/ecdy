@@ -54,10 +54,17 @@
 
 ### Verified locally (2026-09-28)
 
-- `go test -race` of `./cmd/ecdy/` (×3), `./internal/daemon/` (×3), the new shell tests on zsh
-  5.9.2; `golangci-lint run` — 0 issues.
-- Not yet: the full `nix develop .#zsh-matrix -c go test -race ./...` (zsh 5.8.1, 5.9), `-count=20`
-  of the PTY tests, a run on one CPU, `nix build`, and a manual check with claude-agent-acp.
+- `nix develop -c go test -race ./cmd/ecdy/ ./internal/...` — green (1:46);
+  `nix develop .#zsh-matrix -c go test -race -count=20 ./shell/` (zsh 5.8.1, 5.9, 5.9.2) — green (3:00);
+  on one CPU (`taskset -c 0`): `./shell/ ./internal/daemon/` ×3 and `./cmd/ecdy/` — green after
+  fixing `TestPermissionWithdrawnByAgent`, which assumed an order that one CPU does not keep;
+  `golangci-lint run` — 0 issues; `nix build` (`ecdy e9713a9`), `nix flake check` — ok.
+  No `ecdy daemon` or agent process left after any run.
+- Manual check with claude-agent-acp (npx) through the daemon: "remember 7481" (4 s, agent
+  start-up included), then "what number?" → `7481` (1 s); `ecdy daemon status` showed the agent
+  and its ACP session; `ecdy daemon stop` left no process.
+- Mutation check: 19 deliberate breakages of the new code, each run alone with
+  `go test -timeout=60s`; all caught.
 
 ### Known limitations
 

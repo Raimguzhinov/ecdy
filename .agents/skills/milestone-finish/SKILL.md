@@ -11,10 +11,16 @@ Run every step; if one cannot be done, say so in the report instead of skipping 
 
 - Each new test must have been seen failing once: break the code or revert the fix locally,
   watch the test go red, restore. A test that passed on its first run proves nothing yet.
+  Break one thing at a time, with `go test -timeout=60s`: broken code often makes a test hang
+  instead of fail. Afterwards check that no `ecdy daemon`/`fake-agent` process is left.
 - Every timeout, deadline or retry has a test with the extreme value (`0`, a hung child).
 - Classifier or redactor changes start as rows in the golden tables (AGENTS.md, section 8).
 
 ## 2. Local checks
+
+Foreground only, each with an outer `timeout` and `go test -timeout`; ask the maintainer before
+the long ones (measured in M4: `./cmd/ecdy/ ./internal/...` with `-race` ~2 min, `./shell/`
+`-race -count=20` on the matrix ~3 min).
 
 ```sh
 nix develop .#zsh-matrix -c go test -race ./...           # CI go job: zsh 5.8.1, 5.9, latest

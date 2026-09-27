@@ -283,6 +283,12 @@ User installation (like atuin/zoxide): `eval "$(ecdy init zsh)"` in `.zshrc`.
 - **Update `docs/STATUS.md`** at the end of every session: what's done, what's broken, the next step.
 - **Trust a test only after seeing it fail.** Revert the fix or break the code locally, watch the new
   test go red, restore. Every timeout or deadline gets a test with the extreme value (`0`, a hung child).
+- **Every wait in a test is bounded.** No bare `<-ch` on something the code under test must close:
+  `select` with a deadline, so a regression fails the test instead of hanging it. Run `go test`
+  with `-timeout`, and long local runs with an outer `timeout`; a mutation check (break the code,
+  watch the test go red) runs one mutation at a time with `-timeout=60s`, because broken code
+  often hangs rather than fails.
+- **Tests clean up the processes they start**, daemons included, even when they fail midway.
 - **Shell integration is tested on every supported zsh** (`nix develop .#zsh-matrix`: 5.8.1 — the
   oldest supported, 5.9, the latest); CI runs the same devShell. PTY tests also run with
   `-race -count=20` before a PR, and on one CPU after timing-sensitive changes.
