@@ -21,7 +21,7 @@
           pname = "ecdy";
           inherit version;
           src = self;
-          vendorHash = "sha256-RnLGn1LE4H5MYz+2Rvl3r5veXrUcasS73fQW1yNVNrQ=";
+          vendorHash = "sha256-k/zTv3h4a99+W1a0piU4FEf+xHZKsRCvz73DMphadP8=";
           subPackages = [ "cmd/ecdy" ];
           env.CGO_ENABLED = 0;
           ldflags = [

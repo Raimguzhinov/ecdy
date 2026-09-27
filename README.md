@@ -2,7 +2,7 @@
 
 > From *ecdysis* — molting: an arthropod sheds its old shell in order to grow.
 
-**Status: early development (M2 — zsh integration). Prompts are not sent to an agent yet: `ecdy ask` only prints them.**
+**Status: early development (M3 — ACP one-shot). Each prompt starts the agent anew: the conversation does not continue across prompts yet, and the agent sees no shell context.**
 
 ecdy is a smart layer on top of your real shell. You keep typing in zsh with your own config,
 completion, highlighting and history. On Enter, ecdy decides whether the line is a shell command
@@ -16,7 +16,7 @@ It uses your agents' own logins and subscriptions; there is no ecdy cloud and no
 
 - A prompt is never executed as a command. When the classifier is unsure, it asks.
 - If the `ecdy` binary is missing, crashes or is too slow, zsh behaves exactly like vanilla zsh.
-- Every agent permission request is shown to you.
+- Every agent permission request is shown to you; nothing is allowed by default.
 
 ## Usage
 
@@ -50,6 +50,53 @@ it) and binds Alt+Enter (`^[^M`) in the `emacs` and `viins` keymaps. Settings, r
 
 If `ecdy` is missing, crashes, prints something unexpected or misses the deadline, Enter behaves
 exactly like in vanilla zsh.
+
+## Agents
+
+A prompt runs `ecdy ask -- '<prompt>'`: it starts the agent in the current directory, sends the
+prompt in a new ACP session, streams the reply and exits. Tool calls appear as one status line each
+(`⚙ Read main.go ✓`, `$ go test ./... ✗`); `ecdy ask -v` also shows thoughts, plans, tool output and
+the agent's stderr.
+
+Built-in agents (the launch commands of the [ACP Registry](https://github.com/agentclientprotocol/registry)):
+
+| Name | Command |
+|---|---|
+| `claude` (default) | `npx -y @agentclientprotocol/claude-agent-acp` |
+| `codex` | `npx -y @agentclientprotocol/codex-acp` |
+| `gemini` | `gemini --acp` |
+| `opencode` | `opencode acp` |
+
+Pick one per prompt with `ecdy ask --agent codex -- ...`, or add and override agents in
+`~/.config/ecdy/config.toml` (`$XDG_CONFIG_HOME/ecdy/config.toml`):
+
+```toml
+default_agent = "codex"
+
+[agents.claude]
+command = ["claude-agent-acp"]   # installed globally instead of npx
+```
+
+ecdy uses the agent's own login: log in with the agent's CLI first (`claude`, `codex login`, …).
+If the agent reports that it needs authentication, `ecdy ask` says so and exits.
+
+**Permissions.** Every permission request of the agent is shown under the reply:
+
+```
+⚠ Allow? rm -rf build
+  1 Allow once 2 Always allow 3 Reject  · Esc reject · ^C cancel
+```
+
+Press the option's number, `y` (allow once), `n` or Esc (reject). Enter does nothing: nothing is
+allowed by default, and keys typed before the dialog appeared are discarded. Without a terminal
+(e.g. in a script) every request is rejected. "Always allow" is remembered by the agent, not by ecdy.
+
+**Ctrl+C** cancels the turn (`session/cancel`) and waits for the agent to stop; a second Ctrl+C
+stops the agent at once. Exit status: 0 — the turn completed, 1 — agent or protocol error,
+130 — cancelled.
+
+Set `ECDY_LOG=debug` (or `info`, `warn`, `error`) to log protocol diagnostics to
+`$XDG_STATE_HOME/ecdy/ecdy.log` (`~/.local/state/ecdy/ecdy.log`).
 
 ## Development
 

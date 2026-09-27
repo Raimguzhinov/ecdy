@@ -11,13 +11,43 @@ import (
 
 	"github.com/Raimguzhinov/ecdy/internal/classify"
 	"github.com/Raimguzhinov/ecdy/internal/testutil"
+	"github.com/Raimguzhinov/ecdy/internal/testutil/fakeagent"
 )
 
 // ecdyBin is the ecdy binary built once for all PTY tests.
 var ecdyBin string
 
+// agentEnv points `ecdy ask` at the fake agent: the test binary run with
+// the argument fake-agent, which replies agentReply followed by the prompt.
+var agentEnv []string
+
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "fake-agent" {
+		fakeagent.Main()
+	}
 	os.Exit(run(m))
+}
+
+// setupAgent writes the ecdy config and the fake agent's script to dir.
+func setupAgent(dir string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find the test binary: %w", err)
+	}
+	scriptEnv, err := fakeagent.WriteScript(dir, fakeagent.Script{Turn: []fakeagent.Step{{Text: askReply}, {Echo: true}}})
+	if err != nil {
+		return err
+	}
+	cfgDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(filepath.Join(cfgDir, "ecdy"), 0o700); err != nil {
+		return fmt.Errorf("config directory: %w", err)
+	}
+	cfg := fmt.Sprintf("default_agent = \"fake\"\n[agents.fake]\ncommand = [%q, \"fake-agent\"]\n", self)
+	if err := os.WriteFile(filepath.Join(cfgDir, "ecdy", "config.toml"), []byte(cfg), 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	agentEnv = []string{"XDG_CONFIG_HOME=" + cfgDir, scriptEnv}
+	return nil
 }
 
 func run(m *testing.M) int {
@@ -27,6 +57,10 @@ func run(m *testing.M) int {
 		return 1
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
+	if err := setupAgent(dir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	ecdyBin = filepath.Join(dir, "ecdy")
 	build := exec.Command("go", "build", "-o", ecdyBin, "github.com/Raimguzhinov/ecdy/cmd/ecdy")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -94,13 +128,13 @@ func startZsh(t *testing.T, zsh string, o zshOpts) *zshTerm {
 	}
 	cmd := exec.Command(zsh, "-f", "-i")
 	cmd.Dir = home
-	cmd.Env = []string{
+	cmd.Env = append([]string{
 		"HOME=" + home,
 		"PATH=" + o.path,
 		"TERM=xterm",
 		"LANG=C.UTF-8",
 		"LC_ALL=C.UTF-8",
-	}
+	}, agentEnv...)
 	z := &zshTerm{Term: testutil.StartTerm(t, cmd), t: t, home: home}
 	z.Diag = func() string {
 		var b strings.Builder
@@ -133,7 +167,8 @@ func (z *zshTerm) Run(line, want string) {
 	z.ExpectPrompt()
 }
 
-const askReply = "ecdy ask (no agent yet): "
+// askReply starts the fake agent's reply to a prompt.
+const askReply = "agent: "
 
 func TestCommand(t *testing.T) { forEachZsh(t, testCommand) }
 

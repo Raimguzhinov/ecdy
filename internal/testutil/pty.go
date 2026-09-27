@@ -38,6 +38,9 @@ type Term struct {
 	pos  int           // Expect searches output after this offset
 	more chan struct{} // closed and replaced whenever output arrives
 	done chan struct{} // closed when the reader stops
+
+	waitOnce sync.Once
+	waitErr  error
 }
 
 // StartTerm starts cmd under an 80x24 PTY. The process is killed and waited
@@ -72,9 +75,13 @@ func (t *Term) read() {
 
 func (t *Term) close() {
 	_ = t.cmd.Process.Kill()
-	_ = t.cmd.Wait()
+	t.reap()
 	_ = t.ptmx.Close()
 	<-t.done
+}
+
+func (t *Term) reap() {
+	t.waitOnce.Do(func() { t.waitErr = t.cmd.Wait() })
 }
 
 // Send writes keys to the terminal as if typed.
@@ -211,6 +218,23 @@ func (t *Term) Wait() {
 	case <-time.After(DefaultTimeout):
 		t.tb.Fatalf("process did not exit\noutput after last match:\n%s\n%s", t.rest(), t.diag())
 	}
+}
+
+// ExitCode waits for the process to exit, up to DefaultTimeout, and returns
+// its exit code (-1 if it was killed by a signal).
+func (t *Term) ExitCode() int {
+	t.tb.Helper()
+	exited := make(chan struct{})
+	go func() {
+		t.reap()
+		close(exited)
+	}()
+	select {
+	case <-exited:
+	case <-time.After(DefaultTimeout):
+		t.tb.Fatalf("process did not exit\noutput after last match:\n%s\n%s", t.rest(), t.diag())
+	}
+	return t.cmd.ProcessState.ExitCode()
 }
 
 var ansi = regexp.MustCompile(`\x1b(\[[0-9;?]*[ -/]*[@-~]|\][^\x07]*\x07|[()][0-9A-Za-z]|[=>78DEHMc])`)

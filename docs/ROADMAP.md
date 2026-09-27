@@ -16,10 +16,11 @@ milestone's DoD is met and [STATUS.md](STATUS.md) is updated. Design context: [A
 *DoD:* PTY tests (`zsh -f` + plugin) for: a command, a prompt, Ask, fail-open, history recording, coexistence with
 zsh-syntax-highlighting and zsh-autosuggestions (loaded in the test from vendored copies or from nix).
 
-**M3 — ACP one-shot.** `ecdy ask` without a daemon: spawn agent → initialize → session/new → session/prompt → stream → exit.
+**M3 — ACP one-shot.** ✅ `ecdy ask` without a daemon: spawn agent → initialize → session/new → session/prompt → stream → exit.
 Permission dialog, Ctrl+C → cancel.
 *DoD:* tests against the fake agent from `internal/testutil` (text streaming, tool call, permission allow/reject, cancel, agent crash);
-manual check with claude-agent-acp and codex-acp, results recorded in STATUS.md.
+manual check with claude-agent-acp and codex-acp, results recorded in STATUS.md
+(codex-acp could not be checked: no network access to its backend here; see STATUS.md).
 
 **M4 — Daemon and continuity.** One daemon per session (`ECDY_SESSION` is exported by the plugin), lazy start, unix socket 0700,
 shutdown on `zshexit` and idle timeout. The conversation continues across prompts. `ecdy new` — a new ACP session,

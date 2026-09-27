@@ -194,13 +194,18 @@ default_agent = "claude"
 command = ["npx", "-y", "@agentclientprotocol/claude-agent-acp"]
 
 [agents.codex]
-command = ["npx", "-y", "@zed-industries/codex-acp"]
+command = ["npx", "-y", "@agentclientprotocol/codex-acp"]
 
 [agents.gemini]
 command = ["gemini", "--acp"]
 
-# opencode, pi and others — check launch commands against the ACP Registry before adding a preset
+[agents.opencode]
+command = ["opencode", "acp"]
+
+# pi and others — check launch commands against the ACP Registry before adding a preset
 ```
+
+These presets are built in (`internal/config`); the file only adds agents or overrides them.
 
 The agent owns authentication: if the user is logged in to the agent's CLI, that login is used.
 ecdy does not store keys.
