@@ -140,6 +140,15 @@ _ecdy_classify() {
   reply=("${fields[@]}")
 }
 
+# _ecdy_nap — sleep 10 ms without forking. Returns 1 without zsh/zselect,
+# so that callers stop waiting instead of spinning. zselect's own status is
+# 1 on a timeout, so it cannot tell that apart.
+_ecdy_nap() {
+  zmodload -e zsh/zselect || return 1
+  zselect -t 1 2>/dev/null
+  return 0
+}
+
 # _ecdy_stop PID — kill a classifier that missed its deadline and wait (up to
 # 0.2 s) until it is gone. `wait` does not work for process substitutions, and
 # a child that exits later, while ZLE draws the next prompt, can leave that
@@ -150,7 +159,7 @@ _ecdy_stop() {
   integer i
   for (( i = 0; i < 20; i++ )); do
     kill -0 $1 2>/dev/null || return 0
-    zselect -t 1 2>/dev/null || return 0 # 10 ms; no zsh/zselect: don't spin
+    _ecdy_nap || return 0
   done
 }
 
