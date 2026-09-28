@@ -17,6 +17,7 @@ import (
 
 	"github.com/Raimguzhinov/ecdy/internal/config"
 	"github.com/Raimguzhinov/ecdy/internal/daemon"
+	"github.com/Raimguzhinov/ecdy/internal/sessionlog"
 )
 
 // The zsh plugin exports these (docs/adr/0003-session-daemon.md).
@@ -38,8 +39,8 @@ func loadConfig() (config.Config, error) {
 }
 
 // serverOptions configure the server that runs agents, in a daemon or in
-// `ecdy ask` itself; statePath is the session's state file, if any.
-func serverOptions(logger *slog.Logger, statePath string) daemon.Options {
+// `ecdy ask` itself; p is the shell session, or the zero Paths for none.
+func serverOptions(logger *slog.Logger, p daemon.Paths) daemon.Options {
 	o := daemon.Options{
 		Config:        loadConfig,
 		Logger:        logger,
@@ -47,8 +48,20 @@ func serverOptions(logger *slog.Logger, statePath string) daemon.Options {
 		CancelGrace:   cancelGrace,
 		ClientVersion: resolveVersion(),
 	}
-	if statePath != "" {
-		o.State = func() (daemon.State, error) { return daemon.LoadState(statePath) }
+	if p.State != "" {
+		o.State = func() (daemon.State, error) { return daemon.LoadState(p.State) }
+	}
+	o.Context = func(cfg config.Config, cwd string, since time.Time) (string, time.Time) {
+		var recs []sessionlog.Record
+		if p.Session != "" {
+			if l, err := sessionLog(p.Session); err == nil {
+				recs, err = l.Read()
+				if err != nil && logger != nil {
+					logger.Warn("session log", "err", err)
+				}
+			}
+		}
+		return buildContext(cfg, cwd, recs, since)
 	}
 	return o
 }
@@ -113,7 +126,8 @@ func newDaemonCmd() *cobra.Command {
 				ShellPid:    shellPid,
 				IdleTimeout: cfg.IdleTimeout,
 				Ready:       ready,
-				Server:      serverOptions(logger, p.State),
+				Server:      serverOptions(logger, p),
+				EndSession:  func() { removeSessionLog(p.Session) },
 			})
 		},
 	}
@@ -141,6 +155,7 @@ func newDaemonStopCmd() *cobra.Command {
 			running, err := daemon.Stop(ctx, p.Socket, !noWait)
 			if endSession {
 				_ = os.Remove(p.State)
+				removeSessionLog(p.Session)
 			}
 			if err != nil {
 				return err
@@ -152,7 +167,7 @@ func newDaemonStopCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "do not wait for the agents to exit")
-	cmd.Flags().BoolVar(&endSession, "end-session", false, "also forget the session's agent (the plugin's zshexit hook)")
+	cmd.Flags().BoolVar(&endSession, "end-session", false, "also forget the session's agent and remove its command log (the plugin's zshexit hook)")
 	_ = cmd.Flags().MarkHidden("end-session")
 	return cmd
 }

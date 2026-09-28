@@ -38,6 +38,12 @@ type Options struct {
 	CancelGrace time.Duration
 	// ClientVersion is sent to agents as clientInfo.version.
 	ClientVersion string
+	// Context, if set, returns the session context sent before each prompt
+	// (docs/adr/0004-session-context.md): the block for the prompt's cwd
+	// with the commands that ended after since, and the end time to pass as
+	// since at the next turn of the same conversation. An empty block is not
+	// sent.
+	Context func(cfg config.Config, cwd string, since time.Time) (block string, last time.Time)
 	// OnConn, if set, is called with +1 when a connection starts being
 	// served and -1 when it is done.
 	OnConn func(delta int)
@@ -157,6 +163,10 @@ type agent struct {
 	s    *Server
 
 	busy bool // a turn holds the agent; guarded by Server.mu
+
+	// since: the conversation has been sent the commands that ended up to
+	// this time. Only the turn holding the agent (busy) touches it.
+	since time.Time
 
 	mu     sync.Mutex
 	conn   *acpclient.Conn // nil until started, and after it died
@@ -282,8 +292,19 @@ func (s *Server) prompt(w *wire, m Msg) {
 	if !fresh && !within(m.Cwd, a.cwd) {
 		t.notice(fmt.Sprintf("this conversation runs in %s; `ecdy new` starts one here", a.cwd))
 	}
+	texts := []string{m.Prompt}
+	if s.opts.Context != nil {
+		if fresh {
+			a.since = time.Time{}
+		}
+		var block string
+		block, a.since = s.opts.Context(cfg, m.Cwd, a.since)
+		if block != "" {
+			texts = []string{block, m.Prompt}
+		}
+	}
 	a.setTurn(t)
-	stop, err := conn.Prompt(ctx, m.Prompt)
+	stop, err := conn.Prompt(ctx, texts...)
 	a.setTurn(nil)
 	if err != nil {
 		var ee *acpclient.ExitError
