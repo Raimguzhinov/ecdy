@@ -165,6 +165,29 @@ type Request struct {
 	Pid    int             `json:"pid"` // of the agent process that received it
 }
 
+// Prompts returns the text blocks of every session/prompt recorded to path.
+func Prompts(path string) ([][]string, error) {
+	reqs, err := ReadRecord(path)
+	var prompts [][]string
+	for _, r := range reqs {
+		if r.Method != acp.AgentMethodSessionPrompt {
+			continue
+		}
+		var p acp.PromptRequest
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return prompts, fmt.Errorf("decode session/prompt: %w", err)
+		}
+		var texts []string
+		for _, b := range p.Prompt {
+			if b.Text != nil {
+				texts = append(texts, b.Text.Text)
+			}
+		}
+		prompts = append(prompts, texts)
+	}
+	return prompts, err
+}
+
 // ReadRecord reads the requests recorded to path.
 func ReadRecord(path string) ([]Request, error) {
 	f, err := os.Open(path)
@@ -260,10 +283,12 @@ func (a *agent) Cancel(_ context.Context, p acp.CancelNotification) error {
 func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResponse, error) {
 	a.record(acp.AgentMethodSessionPrompt, p)
 	stop := func(r acp.StopReason) (acp.PromptResponse, error) { return acp.PromptResponse{StopReason: r}, nil }
+	// The prompt is the last text block; ecdy sends the session context
+	// in a block before it (see Prompts).
 	var text string
 	for _, b := range p.Prompt {
 		if b.Text != nil {
-			text += b.Text.Text
+			text = b.Text.Text
 		}
 	}
 	a.mu.Lock()

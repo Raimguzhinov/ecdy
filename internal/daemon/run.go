@@ -28,6 +28,9 @@ type RunOptions struct {
 	// finds another daemon listening ("running") or fails ("error: ...");
 	// then it is closed.
 	Ready io.WriteCloser
+	// EndSession, if set, is called after the daemon stopped because the
+	// shell is gone: it removes the session's other files (its command log).
+	EndSession func()
 	// Server configures the server; OnConn is set by Run.
 	Server Options
 }
@@ -113,6 +116,9 @@ func Run(ctx context.Context, o RunOptions) (err error) {
 	s.Wait()
 	if reason == "shell gone" {
 		_ = os.Remove(o.Paths.State)
+		if o.EndSession != nil {
+			o.EndSession()
+		}
 	}
 	log.Info("daemon stopped")
 	return nil

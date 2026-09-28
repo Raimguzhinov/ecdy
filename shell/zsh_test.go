@@ -315,8 +315,10 @@ func TestFailOpen(t *testing.T) { forEachZsh(t, testFailOpen) }
 func testFailOpen(t *testing.T, zsh string) {
 	dir := t.TempDir()
 	scripts := map[string]string{
-		"crash":   "#!/bin/sh\nexit 2\n",
-		"slow":    "#!/bin/sh\nexec sleep 30\n",
+		"crash": "#!/bin/sh\nexit 2\n",
+		// Only the classifier hangs: every command also runs `ecdy log
+		// record` in the background, and those must not pile up.
+		"slow":    "#!/bin/sh\n[ \"$1\" = classify ] && exec sleep 30\nexit 0\n",
 		"garbage": "#!/bin/sh\nprintf 'prompt\\000'\n",
 	}
 	for name, body := range scripts {

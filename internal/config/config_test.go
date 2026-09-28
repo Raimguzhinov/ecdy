@@ -63,6 +63,10 @@ func TestLoadErrors(t *testing.T) {
 		"idle number":   "idle_timeout = 30\n",
 		"idle unit":     "idle_timeout = \"30\"\n",
 		"idle negative": "idle_timeout = \"-1m\"\n",
+		"ctx negative":  "[context]\ncommands = -1\n",
+		"ctx huge":      "[context]\ncommands = 1001\n",
+		"ctx string":    "[context]\ncommands = \"20\"\n",
+		"ctx unknown":   "[context]\noutput = true\n",
 	}
 	for name, content := range tests {
 		if _, err := Load(write(t, content)); err == nil {
@@ -98,6 +102,18 @@ func TestIdleTimeout(t *testing.T) {
 		c, err := Load(write(t, "idle_timeout = \""+text+"\"\n"))
 		if err != nil || c.IdleTimeout != want {
 			t.Errorf("idle_timeout = %q: %v, %v; want %v", text, c.IdleTimeout, err, want)
+		}
+	}
+}
+
+func TestContextCommands(t *testing.T) {
+	if n := Default().ContextCommands; n != 20 {
+		t.Errorf("default context.commands = %d", n)
+	}
+	for text, want := range map[string]int{"": 20, "[context]\n": 20, "[context]\ncommands = 0\n": 0, "[context]\ncommands = 5\n": 5} {
+		c, err := Load(write(t, text))
+		if err != nil || c.ContextCommands != want {
+			t.Errorf("%q: %d, %v; want %d", text, c.ContextCommands, err, want)
 		}
 	}
 }

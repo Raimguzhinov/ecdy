@@ -30,6 +30,9 @@ type Config struct {
 	// IdleTimeout is how long a shell session's daemon keeps its agents
 	// without a prompt (docs/adr/0003-session-daemon.md).
 	IdleTimeout time.Duration
+	// ContextCommands is how many recent commands go to the agent with a
+	// prompt; 0 sends none (docs/adr/0004-session-context.md).
+	ContextCommands int
 }
 
 // file is the layout of config.toml.
@@ -37,7 +40,14 @@ type file struct {
 	DefaultAgent string           `toml:"default_agent"`
 	IdleTimeout  string           `toml:"idle_timeout"`
 	Agents       map[string]Agent `toml:"agents"`
+	Context      struct {
+		Commands *int `toml:"commands"`
+	} `toml:"context"`
 }
+
+// maxContextCommands bounds context.commands: the context block has a size
+// limit of its own, so more would never be sent anyway.
+const maxContextCommands = 1000
 
 // Default returns the built-in presets. Launch commands are taken from the
 // ACP Registry (https://github.com/agentclientprotocol/registry, the
@@ -51,7 +61,8 @@ func Default() Config {
 			"gemini":   {Command: []string{"gemini", "--acp"}},
 			"opencode": {Command: []string{"opencode", "acp"}},
 		},
-		IdleTimeout: 30 * time.Minute,
+		IdleTimeout:     30 * time.Minute,
+		ContextCommands: 20,
 	}
 }
 
@@ -95,6 +106,12 @@ func Load(path string) (Config, error) {
 			return c, fmt.Errorf("%s: idle_timeout: %q is not a duration like \"30m\"", path, file.IdleTimeout)
 		}
 		c.IdleTimeout = d
+	}
+	if n := file.Context.Commands; n != nil {
+		if *n < 0 || *n > maxContextCommands {
+			return c, fmt.Errorf("%s: context.commands: %d is not between 0 and %d", path, *n, maxContextCommands)
+		}
+		c.ContextCommands = *n
 	}
 	for name, a := range file.Agents {
 		if len(a.Command) == 0 || a.Command[0] == "" {

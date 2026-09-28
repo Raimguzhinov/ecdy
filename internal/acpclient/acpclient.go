@@ -271,12 +271,16 @@ func (c *Conn) Session() acp.SessionId {
 	return c.session
 }
 
-// Prompt sends one prompt and blocks until the turn ends, returning the stop
-// reason. Cancelling ctx sends session/cancel and keeps waiting for the
+// Prompt sends one prompt, each of texts as a text content block, and blocks
+// until the turn ends, returning the stop reason. Cancelling ctx sends session/cancel and keeps waiting for the
 // agent's answer, normally stop reason cancelled
 // (https://agentclientprotocol.com/protocol/prompt-turn#cancellation); Kill
 // unblocks it for good.
-func (c *Conn) Prompt(ctx context.Context, text string) (acp.StopReason, error) {
+func (c *Conn) Prompt(ctx context.Context, texts ...string) (acp.StopReason, error) {
+	blocks := make([]acp.ContentBlock, len(texts))
+	for i, t := range texts {
+		blocks[i] = acp.TextBlock(t)
+	}
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	session := c.Session()
@@ -305,7 +309,7 @@ func (c *Conn) Prompt(ctx context.Context, text string) (acp.StopReason, error) 
 		// connection.
 		resp, err := c.conn.Prompt(context.Background(), acp.PromptRequest{
 			SessionId: session,
-			Prompt:    []acp.ContentBlock{acp.TextBlock(text)},
+			Prompt:    blocks,
 		})
 		done <- result{resp, err}
 	}()

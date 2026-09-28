@@ -32,7 +32,7 @@ type env struct {
 	srv    *Server
 }
 
-func newEnv(t *testing.T, s fakeagent.Script, cancelGrace time.Duration) *env {
+func newEnv(t *testing.T, s fakeagent.Script, cancelGrace time.Duration, opts ...func(*Options)) *env {
 	t.Helper()
 	dir := t.TempDir()
 	e := &env{dir: dir, record: filepath.Join(dir, "record.jsonl")}
@@ -44,12 +44,16 @@ func newEnv(t *testing.T, s fakeagent.Script, cancelGrace time.Duration) *env {
 	cfg := config.Default()
 	cfg.DefaultAgent = "fake"
 	cfg.Agents["fake"] = config.Agent{Command: []string{os.Args[0]}}
-	e.srv = NewServer(Options{
+	o := Options{
 		Config:      func() (config.Config, error) { return cfg, nil },
 		Env:         append(os.Environ(), scriptEnv),
 		KillGrace:   time.Second,
 		CancelGrace: cancelGrace,
-	})
+	}
+	for _, f := range opts {
+		f(&o)
+	}
+	e.srv = NewServer(o)
 	t.Cleanup(func() {
 		e.srv.Close()
 		e.srv.Wait()
@@ -165,6 +169,69 @@ func TestTurnsContinue(t *testing.T) {
 	}
 	if pids := e.pids(t); len(pids) != 1 {
 		t.Errorf("agent pids %v, want one process", pids)
+	}
+}
+
+// TestContext: the context block goes before the prompt; each conversation
+// passes back the time it got from the previous turn, and a new one (ecdy
+// new) starts from zero; an empty block is not sent.
+func TestContext(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		sinces []time.Time
+		gen    int
+	)
+	t1 := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	e := newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Echo: true}}}, time.Second, func(o *Options) {
+		o.Context = func(cfg config.Config, cwd string, since time.Time) (string, time.Time) {
+			mu.Lock()
+			defer mu.Unlock()
+			sinces = append(sinces, since)
+			n := len(sinces)
+			if n == 3 {
+				return "", since
+			}
+			return fmt.Sprintf("context %d for %s (%d commands)", n, filepath.Base(cwd), cfg.ContextCommands), t1.Add(time.Duration(n) * time.Minute)
+		}
+		o.State = func() (State, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return State{Generation: gen}, nil
+		}
+	})
+	for i, p := range []string{"one", "two", "three", "four"} {
+		if i == 3 {
+			mu.Lock()
+			gen++ // ecdy new
+			mu.Unlock()
+		}
+		h := &handler{}
+		if _, err := e.turn(t, p, h).Wait(); err != nil {
+			t.Fatalf("turn %q: %v", p, err)
+		}
+		if h.Text() != p+"\n" {
+			t.Errorf("turn %q: the agent echoed %q", p, h.Text())
+		}
+	}
+	base := filepath.Base(e.dir)
+	prompts, err := fakeagent.Prompts(e.record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{"context 1 for " + base + " (20 commands)", "one"},
+		{"context 2 for " + base + " (20 commands)", "two"},
+		{"three"},
+		{"context 4 for " + base + " (20 commands)", "four"},
+	}
+	if fmt.Sprint(prompts) != fmt.Sprint(want) {
+		t.Errorf("prompts:\n%q\nwant:\n%q", prompts, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	wantSince := []time.Time{{}, t1.Add(time.Minute), t1.Add(2 * time.Minute), {}}
+	if fmt.Sprint(sinces) != fmt.Sprint(wantSince) {
+		t.Errorf("since = %v\nwant    %v", sinces, wantSince)
 	}
 }
 

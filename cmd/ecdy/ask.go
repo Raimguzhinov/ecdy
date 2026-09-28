@@ -181,7 +181,7 @@ func runAsk(cmd *cobra.Command, agentName string, verbose bool, prompt string) e
 func connect(ctx context.Context, logger *slog.Logger) (conn net.Conn, done func(), err error) {
 	session := os.Getenv(envSession)
 	if session == "" {
-		srv := daemon.NewServer(serverOptions(logger, ""))
+		srv := daemon.NewServer(serverOptions(logger, daemon.Paths{}))
 		client, server := net.Pipe()
 		go srv.ServeConn(server)
 		return client, func() {

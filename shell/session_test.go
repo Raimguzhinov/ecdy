@@ -119,6 +119,9 @@ func TestConversation(t *testing.T) { forEachZsh(t, testConversation) }
 func testConversation(t *testing.T, zsh string) {
 	z, record := sessionShell(t, zsh, zshOpts{})
 	z.Run("remember the number 42", "history: remember the number 42")
+	// zshexit runs in a subshell that calls exit too; it must not end the
+	// session (found in M5: `(exit 3)` stopped the daemon).
+	z.Run("(print -r -- in-a-subshell; exit 3)", "in-a-subshell")
 	z.Run("what was the number", "history: remember the number 42 | what was the number")
 	z.Run("ecdy new", "new conversation")
 	z.Run("start over please", "history: start over please\r\n")
@@ -153,6 +156,7 @@ func testExitStopsDaemon(t *testing.T, zsh string) {
 			if len(state) != 1 {
 				t.Fatalf("state files: %v", state)
 			}
+			z.waitRecords(2) // ecdy use other, ecdy daemon status
 			start := time.Now()
 			if how == "exit" {
 				z.Send("exit" + enter)
@@ -169,6 +173,11 @@ func testExitStopsDaemon(t *testing.T, zsh string) {
 			waitNoSockets(t, z.runtime)
 			if _, err := os.Stat(state[0]); !os.IsNotExist(err) {
 				t.Errorf("state file after the shell exited: %v", err)
+			}
+			// The command log goes too: removed by zshexit, or by the daemon
+			// once the shell is gone.
+			if logs := z.sessionLogs(); len(logs) != 0 {
+				t.Errorf("session logs after the shell exited: %v", logs)
 			}
 		})
 	}
