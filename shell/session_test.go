@@ -156,6 +156,7 @@ func testExitStopsDaemon(t *testing.T, zsh string) {
 			if len(state) != 1 {
 				t.Fatalf("state files: %v", state)
 			}
+			z.waitRecords(2) // ecdy use other, ecdy daemon status
 			start := time.Now()
 			if how == "exit" {
 				z.Send("exit" + enter)
@@ -172,6 +173,11 @@ func testExitStopsDaemon(t *testing.T, zsh string) {
 			waitNoSockets(t, z.runtime)
 			if _, err := os.Stat(state[0]); !os.IsNotExist(err) {
 				t.Errorf("state file after the shell exited: %v", err)
+			}
+			// The command log goes too: removed by zshexit, or by the daemon
+			// once the shell is gone.
+			if logs := z.sessionLogs(); len(logs) != 0 {
+				t.Errorf("session logs after the shell exited: %v", logs)
 			}
 		})
 	}

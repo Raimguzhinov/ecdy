@@ -21,6 +21,12 @@
 # ECDY_SHELL_PID, so that `ecdy ask` talks to this session's daemon and the
 # conversation continues across prompts. The daemon is started by the first
 # prompt and stopped by the zshexit hook (docs/adr/0003-session-daemon.md).
+#
+# After every command, precmd runs `ecdy log record` in the background: the
+# line, its directory, exit status and duration go to the session's log,
+# secrets redacted, and the agent gets the recent ones with a prompt
+# (docs/adr/0004-session-context.md; `ecdy log` shows them). Lines starting
+# with a space are not recorded when HIST_IGNORE_SPACE is set.
 
 [[ -o interactive ]] || return 0
 # Oldest supported zsh; on older ones Enter stays vanilla (fail-open).
@@ -43,6 +49,8 @@ export ECDY_SHELL_PID=$$
 
 typeset -g _ECDY_ORIG=''      # the line the user typed, for zshaddhistory
 typeset -g _ECDY_REWRITTEN='' # what accept-line actually ran instead
+typeset -g _ECDY_ASK_LINE=''  # the same, for preexec: a prompt is not a command to record
+typeset -g _ECDY_CMD='' _ECDY_CMD_CWD='' _ECDY_CMD_START='' # the command running now
 
 # Words after which the next word is still in command position, and the
 # options of those words that take a separate value. Must match
@@ -153,6 +161,7 @@ _ecdy_to_agent() {
   _ECDY_ORIG=$BUFFER
   BUFFER="${(q)${ECDY_BIN:-ecdy}} ask -- ${(qq)1}"
   _ECDY_REWRITTEN=$BUFFER
+  _ECDY_ASK_LINE=$BUFFER
 }
 
 # _ecdy_dialog — the Ask dialog: one line under the input, one key.
@@ -255,7 +264,41 @@ _ecdy_zshexit() {
   return 0
 }
 
+# Remember the command about to run for the session log. $1 is the line as
+# typed, continuation lines included (zshmisc, "Hook Functions").
+_ecdy_preexec() {
+  emulate -L zsh
+  _ECDY_CMD=''
+  if [[ -n $_ECDY_ASK_LINE && $1 == $_ECDY_ASK_LINE ]]; then
+    _ECDY_ASK_LINE=''
+    return 0
+  fi
+  _ECDY_ASK_LINE=''
+  # emulate -L keeps HIST_IGNORE_SPACE: only options that affect
+  # portability are reset (zshbuiltins, "emulate").
+  [[ -o histignorespace && $1 == ' '* ]] && return 0
+  [[ -n $EPOCHREALTIME ]] || return 0 # no zsh/datetime
+  _ECDY_CMD=$1 _ECDY_CMD_CWD=$PWD _ECDY_CMD_START=$EPOCHREALTIME
+}
+
+# _ecdy_record STATUS — add the command that just ended to the session log.
+# In the background and disowned: the prompt never waits for ecdy, and a
+# missing or hung binary cannot hold the shell (AGENTS.md, invariant 2).
+_ecdy_record() {
+  emulate -L zsh
+  [[ -n $_ECDY_CMD ]] || return 0
+  local bin=${ECDY_BIN:-ecdy} cmd=$_ECDY_CMD
+  _ECDY_CMD=''
+  whence -p -- $bin >/dev/null 2>&1 || return 0
+  command $bin log record --exit=$1 --start=$_ECDY_CMD_START --end=$EPOCHREALTIME \
+    --cwd=$_ECDY_CMD_CWD -- $cmd </dev/null >/dev/null 2>&1 &!
+}
+
 _ecdy_precmd() {
+  # First: $? is the status of the command. zsh gives every precmd function
+  # that status, whatever the functions before it did (checked on 5.8.1-5.9.2).
+  local st=$?
+  _ecdy_record $st
   [[ -n $_ECDY_HISTORY_PENDING ]] || return 0
   print -sr -- $_ECDY_HISTORY_PENDING
   _ECDY_HISTORY_PENDING=''
@@ -271,5 +314,6 @@ bindkey -M viins '^[^M' ecdy-force-command
 
 autoload -Uz add-zsh-hook
 add-zsh-hook zshaddhistory _ecdy_zshaddhistory
+add-zsh-hook preexec _ecdy_preexec
 add-zsh-hook precmd _ecdy_precmd
 add-zsh-hook zshexit _ecdy_zshexit
