@@ -51,6 +51,7 @@ typeset -g _ECDY_ORIG=''      # the line the user typed, for zshaddhistory
 typeset -g _ECDY_REWRITTEN='' # what accept-line actually ran instead
 typeset -g _ECDY_ASK_LINE=''  # the same, for preexec: a prompt is not a command to record
 typeset -g _ECDY_CMD='' _ECDY_CMD_CWD='' _ECDY_CMD_START='' # the command running now
+typeset -ga _ecdy_recorders=() # pids of `ecdy log record` that may still be running
 
 # Words after which the next word is still in command position, and the
 # options of those words that take a separate value. Must match
@@ -171,6 +172,10 @@ _ecdy_to_agent() {
   BUFFER="${(q)${ECDY_BIN:-ecdy}} ask -- ${(qq)1}"
   _ECDY_REWRITTEN=$BUFFER
   _ECDY_ASK_LINE=$BUFFER
+  # The agent should see the command typed just before: let its recorder
+  # finish (it takes milliseconds). A hung one is forgotten, so that it
+  # delays one prompt, not every prompt.
+  _ecdy_wait_recorders 50 || _ecdy_recorders=()
 }
 
 # _ecdy_dialog — the Ask dialog: one line under the input, one key.
@@ -269,6 +274,11 @@ _ecdy_zshexit() {
   (( ${ZSH_SUBSHELL:-0} == 0 )) || return 0
   local bin=${ECDY_BIN:-ecdy}
   whence -p -- $bin >/dev/null 2>&1 || return 0
+  # A recorder still running would write the log again after it is removed.
+  if ! _ecdy_wait_recorders 50; then
+    kill $_ecdy_recorders 2>/dev/null
+    _ecdy_wait_recorders 20
+  fi
   command $bin daemon stop --no-wait --end-session >/dev/null 2>&1
   return 0
 }
@@ -301,6 +311,32 @@ _ecdy_record() {
   whence -p -- $bin >/dev/null 2>&1 || return 0
   command $bin log record --exit=$1 --start=$_ECDY_CMD_START --end=$EPOCHREALTIME \
     --cwd=$_ECDY_CMD_CWD -- $cmd </dev/null >/dev/null 2>&1 &!
+  _ecdy_recorders+=($!)
+  _ecdy_reap_recorders
+}
+
+# Forget the recorders that have finished.
+_ecdy_reap_recorders() {
+  local pid
+  local -a alive
+  for pid in $_ecdy_recorders; do
+    kill -0 $pid 2>/dev/null && alive+=($pid)
+  done
+  _ecdy_recorders=($alive)
+}
+
+# _ecdy_wait_recorders N — wait until the recorders started so far have
+# finished, at most N hundredths of a second. Returns 1 if some are still
+# running (they stay in _ecdy_recorders).
+_ecdy_wait_recorders() {
+  integer i
+  for (( i = 0; i < $1; i++ )); do
+    _ecdy_reap_recorders
+    (( $#_ecdy_recorders )) || return 0
+    _ecdy_nap || break
+  done
+  _ecdy_reap_recorders
+  (( $#_ecdy_recorders == 0 ))
 }
 
 _ecdy_precmd() {

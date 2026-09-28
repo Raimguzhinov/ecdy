@@ -117,8 +117,9 @@ func testSessionContext(t *testing.T, zsh string) {
 			t.Errorf("first context lacks %q:\n%s", want, first)
 		}
 	}
-	if !strings.HasSuffix(second, "Commands since the previous prompt, oldest first:\n"+second[strings.LastIndex(second, "[exit 0, "):]) ||
-		!strings.HasSuffix(second, "] ls -a\n") {
+	// No wait for the record of ls -a before "and now": the plugin waits
+	// for the recorder before it sends a prompt (seen failing on one CPU).
+	if !regexp.MustCompile(`Commands since the previous prompt, oldest first:\n\[exit 0, [0-9.]+s\] ls -a\n$`).MatchString(second) {
 		t.Errorf("second context:\n%s", second)
 	}
 	for _, c := range []string{first, second} {
@@ -144,7 +145,8 @@ func testSessionContext(t *testing.T, zsh string) {
 		t.Errorf("the secret reached the disk:\n%s", data)
 	}
 
-	// The log goes with the session.
+	// The log goes with the session, also when a recorder is still running
+	// at exit: zshexit waits for it (seen failing on one CPU).
 	z.Send("exit" + enter)
 	z.Wait()
 	if _, err := os.Stat(logs[0]); !os.IsNotExist(err) {
@@ -197,15 +199,43 @@ func testSessionContextHungRecorder(t *testing.T, zsh string) {
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("three commands took %v with a hung recorder", d)
 	}
+	var recorders []int
 	deadline := time.Now().Add(testutil.DefaultTimeout)
-	for {
-		data, _ := os.ReadFile(pidfile)
-		if n := len(strings.Fields(string(data))); n >= 3 {
-			break
-		}
+	for len(recorders) < 3 {
 		if time.Now().After(deadline) {
 			t.Fatal("the recorders never ran")
 		}
 		time.Sleep(10 * time.Millisecond)
+		data, _ := os.ReadFile(pidfile)
+		recorders = recorders[:0]
+		for f := range strings.FieldsSeq(string(data)) {
+			if pid, err := strconv.Atoi(f); err == nil {
+				recorders = append(recorders, pid)
+			}
+		}
 	}
+
+	// A prompt waits for the hung recorders once (0.5 s), then forgets them.
+	for i, p := range []string{"first prompt", "second prompt"} {
+		start := time.Now()
+		z.Run(p, askReply+p)
+		d := time.Since(start)
+		if i == 0 && d < 400*time.Millisecond || d > 3*time.Second || i == 1 && d > 400*time.Millisecond {
+			t.Errorf("prompt %d took %v", i+1, d)
+		}
+	}
+
+	// exit waits for the recorder of the last command, then kills it.
+	z.Send("print -r -- last" + enter)
+	z.Expect("last")
+	z.ExpectPrompt()
+	start = time.Now()
+	z.Send("exit" + enter)
+	z.Wait()
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("exit took %v", d)
+	}
+	data, _ := os.ReadFile(pidfile)
+	last, _ := strconv.Atoi(strings.Fields(string(data))[len(strings.Fields(string(data)))-1])
+	waitGone(t, last)
 }

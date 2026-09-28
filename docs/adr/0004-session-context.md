@@ -17,8 +17,12 @@ secrets are removed, where the context block is built, and how it stays bounded.
 **Recording.** The plugin's `preexec` hook keeps the line as typed (`$1`: continuation lines
 included), `$PWD` and `$EPOCHREALTIME`; `precmd` takes `$?` (zsh restores it for every precmd
 function, checked on 5.8.1, 5.9 and 5.9.2) and runs `ecdy log record` **in the background**
-(`&!`, stdio on `/dev/null`). The shell never waits for it, so a slow, hung or missing binary
-cannot delay the prompt; the cost on the shell's side is one fork. Not recorded: the
+(`&!`, stdio on `/dev/null`). The prompt never waits for it, so a slow, hung or missing binary
+cannot delay the next command; the cost on the shell's side is one fork. The plugin keeps the
+recorders' pids and waits for them (up to 0.5 s) in two places only: before it sends a prompt, so
+that the agent sees the command typed just before, and in `zshexit`, so that a late record does
+not create the log again after it is removed (it kills a recorder still running then). A hung
+recorder is forgotten after one such wait. Not recorded: the
 `ecdy ask -- ...` lines the plugin runs for prompts (the prompt is already in the conversation),
 lines starting with a space when `HIST_IGNORE_SPACE` is set (the user asked to keep them out of the
 history), and anything without `ECDY_SESSION`.
@@ -53,8 +57,9 @@ prompt of a new conversation would get, so the user can see exactly what the age
 
 ## Consequences
 
-- One background fork per command. A record can land a few milliseconds after the prompt is
-  drawn; a prompt typed faster than that misses the command. Tests wait for the record.
+- One background fork per command. A prompt or `exit` right after a command can take a few
+  milliseconds longer (up to 0.5 s with a hung recorder, once). Both races (a prompt missing the
+  last command, a log written after the session ended) were found by the PTY tests on one CPU.
 - Secrets that the redactor does not recognise reach the log and the agent. The redactor's table
   (`internal/sessionlog/testdata/redact.tsv`) is where such cases go.
 - Output capture (`tmux capture-pane`) stays off and needs its own ADR.
