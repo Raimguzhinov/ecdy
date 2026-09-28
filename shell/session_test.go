@@ -119,6 +119,9 @@ func TestConversation(t *testing.T) { forEachZsh(t, testConversation) }
 func testConversation(t *testing.T, zsh string) {
 	z, record := sessionShell(t, zsh, zshOpts{})
 	z.Run("remember the number 42", "history: remember the number 42")
+	// zshexit runs in a subshell that calls exit too; it must not end the
+	// session (found in M5: `(exit 3)` stopped the daemon).
+	z.Run("(print -r -- in-a-subshell; exit 3)", "in-a-subshell")
 	z.Run("what was the number", "history: remember the number 42 | what was the number")
 	z.Run("ecdy new", "new conversation")
 	z.Run("start over please", "history: start over please\r\n")

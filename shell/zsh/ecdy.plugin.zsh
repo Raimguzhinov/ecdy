@@ -246,6 +246,9 @@ _ecdy_zshaddhistory() {
 # exiting never waits for the agents. The daemon also stops by itself once
 # this shell's pid is gone (a shell killed without zshexit).
 _ecdy_zshexit() {
+  # zshexit also runs when a subshell calls exit: `(cd x; exit 1)` must not
+  # end the session. ZSH_SUBSHELL counts the forks (zshparam).
+  (( ${ZSH_SUBSHELL:-0} == 0 )) || return 0
   local bin=${ECDY_BIN:-ecdy}
   whence -p -- $bin >/dev/null 2>&1 || return 0
   command $bin daemon stop --no-wait --end-session >/dev/null 2>&1
