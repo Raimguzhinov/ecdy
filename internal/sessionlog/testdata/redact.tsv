@@ -1,0 +1,175 @@
+# Golden cases for sessionlog.Redact.
+# Columns: input<TAB>expected<TAB>comment
+# expected "=" means the input must come back unchanged.
+# Every secret is replaced by [REDACTED]; the text around it is kept.
+# The tokens below are fake: right shape, made-up content, and shaped so that
+# GitHub push protection does not take them for real ones (it blocked a Slack token).
+# Lines starting with '#' and blank lines are ignored. Multi-line cases live in redact_test.go.
+
+# --- Nothing to redact ---
+ls -la	=	plain command
+git status	=	plain command
+	=	empty line
+cd ~/src/ecdy && go test ./...	=	no secret
+echo hello world	=	no secret
+PWD=/home/me make	=	PWD is the working directory, not a password
+OLDPWD=/tmp	=	neither is OLDPWD
+KEYMAP=us loadkeys	=	KEY is not a separate word of the name
+MONKEY=1 ./run	=	KEY only as a suffix of a word
+BYPASS=1 ./run	=	PASS only as a suffix of a word
+COMPASS_DIR=/opt	=	PASS inside a word
+TOKENIZER=bpe python train.py	=	TOKEN inside a word
+ssh-keygen -t ed25519 -C me@host	=	key in a command name
+git log --author=alice	=	a flag that is not secret
+ssh git@github.com	=	user@host is not a credential
+ssh://git@host:22/repo.git	=	no password in the URL
+https://user@example.com/x	=	user without a password
+curl https://example.com/?page=2&sort=asc	=	harmless query
+sort -u file.txt	=	-u is not curl's --user
+docker run -u 1000:1000 alpine	=	-u outside curl
+ps -u root	=	-u outside curl
+mysql -P 3306 -u root	=	-P is the port
+git checkout sk-feature-branch-with-a-long-name	=	sk- with dashes is a branch, not a key
+echo sk-short	=	too short for a key
+echo ghp_short	=	too short for a GitHub token
+echo AKIA123	=	too short for an AWS key
+cat ~/.ssh/id_ed25519.pub	=	path to a public key
+TOKEN=	=	empty value
+export API_KEY=$API_KEY_FROM_VAULT	=	a variable reference is not a secret
+export GITHUB_TOKEN=$(gh auth token)	=	a command substitution is not a secret
+export GITHUB_TOKEN="$(gh auth token)"	=	quoted substitution
+PASSWORD=${DB_PASSWORD} ./migrate	=	braced reference
+echo $GITHUB_TOKEN	=	reading a variable prints nothing secret here
+unset AWS_SECRET_ACCESS_KEY	=	a name without a value
+grep -r password .	=	the word password alone
+man passwd	=	command named passwd
+curl -H 'Accept: application/json' https://api.example.com	=	harmless header
+Authorization	=	header name without a value
+[REDACTED]	=	placeholder is left alone
+PASSWORD_FILE=/run/secrets/db ./run	=	the last word says it is a path, not the secret
+TOKEN_URL=https://auth.example.com/token	=	a URL where the token comes from
+GPG_KEY_ID=ABCDEF12	=	an id, not the key
+mytool --key-file ~/.ssh/k	=	flag naming a file
+mytool --password-file=/run/secrets/db	=	flag naming a file, with =
+echo x | docker login --password-stdin ghcr.io	=	the next word is not the password
+TOKEN=[REDACTED]	=	already redacted: Redact is idempotent
+
+# --- Assignments: NAME=value where a word of NAME is secret ---
+API_KEY=abc123 ./run	API_KEY=[REDACTED] ./run	env prefix
+export GITHUB_TOKEN=abc123	export GITHUB_TOKEN=[REDACTED]	export
+export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY	export AWS_SECRET_ACCESS_KEY=[REDACTED]	secret and key in the name
+DB_PASSWORD=hunter2 psql	DB_PASSWORD=[REDACTED] psql	password
+DB_PASSWD=hunter2 psql	DB_PASSWD=[REDACTED] psql	passwd
+DB_PASS=hunter2 psql	DB_PASS=[REDACTED] psql	pass as a word
+DB_PWD=hunter2 psql	DB_PWD=[REDACTED] psql	pwd as a word of a longer name
+GPG_PASSPHRASE=open sesame	GPG_PASSPHRASE=[REDACTED] sesame	unquoted value ends at a space
+CLIENT_SECRET=s3cr3t	CLIENT_SECRET=[REDACTED]	secret
+GOOGLE_CREDENTIALS=blob	GOOGLE_CREDENTIALS=[REDACTED]	credentials
+GH_PAT=abc123	GH_PAT=[REDACTED]	personal access token
+SESSION_COOKIE=abc123	SESSION_COOKIE=[REDACTED]	cookie
+SECRET_KEY_BASE=abc123 rails s	SECRET_KEY_BASE=[REDACTED] rails s	secret word not last
+api_key=abc123 ./run	api_key=[REDACTED] ./run	lower case
+apiKey=abc123 ./run	apiKey=[REDACTED] ./run	camelCase
+accessToken=abc123	accessToken=[REDACTED]	camelCase token
+APIKEY=abc123	APIKEY=[REDACTED]	apikey in one word
+TOKEN=abc123	TOKEN=[REDACTED]	bare name
+local token=abc123	local token=[REDACTED]	zsh local
+typeset -x API_TOKEN=abc123	typeset -x API_TOKEN=[REDACTED]	typeset
+env OPENAI_API_KEY=abc123 python app.py	env OPENAI_API_KEY=[REDACTED] python app.py	env
+sudo DB_PASSWORD=hunter2 ./migrate	sudo DB_PASSWORD=[REDACTED] ./migrate	after sudo
+A=1 TOKEN=abc123 B=2 ./run	A=1 TOKEN=[REDACTED] B=2 ./run	only the secret one
+TOKEN=abc123;echo done	TOKEN=[REDACTED];echo done	value ends at ;
+TOKEN=abc123&&echo done	TOKEN=[REDACTED]&&echo done	value ends at &
+TOKEN=abc123|cat	TOKEN=[REDACTED]|cat	value ends at |
+(TOKEN=abc123 ./run)	(TOKEN=[REDACTED] ./run)	subshell
+TOKEN=a#b	TOKEN=[REDACTED]	# inside a word is not a comment
+export TOKEN='abc 123'	export TOKEN='[REDACTED]'	single quotes keep the quotes
+export TOKEN="abc 123"	export TOKEN="[REDACTED]"	double quotes keep the quotes
+export TOKEN="abc\"123"	export TOKEN="[REDACTED]"	escaped quote inside double quotes
+export TOKEN='abc	export TOKEN='[REDACTED]	unclosed quote: to the end
+TOKEN='$literal'	TOKEN='[REDACTED]'	$ in single quotes is literal
+TOKEN=abc$SUFFIX	TOKEN=[REDACTED]	literal prefix before a reference
+export TOKEN=abc123 PASSWORD=hunter2	export TOKEN=[REDACTED] PASSWORD=[REDACTED]	two secrets
+helm install app . --set db.password=hunter2	helm install app . --set db.password=[REDACTED]	dotted key
+
+# --- Flags ---
+mytool --password=hunter2	mytool --password=[REDACTED]	--flag=value
+mytool --password hunter2	mytool --password [REDACTED]	--flag value
+mytool --api-key abc123 --verbose	mytool --api-key [REDACTED] --verbose	dashed name
+mytool --api_key=abc123	mytool --api_key=[REDACTED]	underscored name
+mytool --token abc123	mytool --token [REDACTED]	token
+mytool --client-secret=abc123	mytool --client-secret=[REDACTED]	client secret
+mytool --token --verbose	=	next word is a flag, not a value
+mytool --token	=	no value at all
+mytool --token="abc 123"	mytool --token="[REDACTED]"	quoted flag value
+mytool --token 'abc 123' -v	mytool --token '[REDACTED]' -v	quoted separate value
+mytool --token $TOKEN	=	reference as a flag value
+docker login -u me --password-stdin	=	password from stdin, no value
+docker login -u me --password hunter2 ghcr.io	docker login -u me --password [REDACTED] ghcr.io	docker long flag
+docker login -u me -p hunter2 ghcr.io	docker login -u me -p [REDACTED] ghcr.io	docker short -p
+podman login -p hunter2 quay.io	podman login -p [REDACTED] quay.io	podman
+mysql -u root -phunter2 db	mysql -u root -p[REDACTED] db	mysql attached -p
+mysqldump -u root -phunter2 db	mysqldump -u root -p[REDACTED] db	mysqldump
+mysql -u root -p db	=	-p alone prompts for the password
+sshpass -p hunter2 ssh host	sshpass -p [REDACTED] ssh host	sshpass
+sshpass -phunter2 ssh host	sshpass -p[REDACTED] ssh host	sshpass attached
+curl -u alice:hunter2 https://example.com	curl -u alice:[REDACTED] https://example.com	curl basic auth
+curl --user alice:hunter2 https://example.com	curl --user alice:[REDACTED] https://example.com	curl long
+curl --user=alice:hunter2 https://example.com	curl --user=alice:[REDACTED] https://example.com	curl long with =
+curl -s -u alice:hunter2 https://example.com	curl -s -u alice:[REDACTED] https://example.com	curl after another flag
+curl -u alice https://example.com	=	curl prompts for the password
+ls | curl -u alice:hunter2 https://x	ls | curl -u alice:[REDACTED] https://x	curl in a pipeline
+curl https://x; docker run -u 1000:1000 alpine	=	curl rule stops at the end of the curl command
+mysql db && ls -pa	=	mysql rule stops at the end of the mysql command
+
+# --- HTTP headers ---
+curl -H 'Authorization: Bearer abc123' https://x	curl -H 'Authorization: Bearer [REDACTED]' https://x	bearer
+curl -H "Authorization: Basic YWxpY2U6aHVudGVyMg==" https://x	curl -H "Authorization: Basic [REDACTED]" https://x	basic
+curl -H 'Authorization: token abc123' https://x	curl -H 'Authorization: token [REDACTED]' https://x	GitHub style
+curl -H 'authorization: bearer abc123' https://x	curl -H 'authorization: bearer [REDACTED]' https://x	case-insensitive
+curl -H 'Authorization:abc123' https://x	curl -H 'Authorization:[REDACTED]' https://x	no space, no scheme
+curl -H 'Proxy-Authorization: Basic abc123' https://x	curl -H 'Proxy-Authorization: Basic [REDACTED]' https://x	proxy
+curl -H 'X-API-Key: abc123' https://x	curl -H 'X-API-Key: [REDACTED]' https://x	custom key header
+curl -H 'X-Auth-Token: abc123' https://x	curl -H 'X-Auth-Token: [REDACTED]' https://x	custom token header
+curl -H 'Cookie: sid=abc123; theme=dark' https://x	curl -H 'Cookie: [REDACTED]' https://x	cookie: the whole value
+http GET x Authorization:'Bearer abc123'	http GET x Authorization:'Bearer [REDACTED]'	httpie
+Authorization: Bearer abc123	Authorization: Bearer [REDACTED]	bare header to the end of the line
+
+# --- URLs ---
+git clone https://alice:hunter2@example.com/r.git	git clone https://alice:[REDACTED]@example.com/r.git	password in the URL
+psql postgres://app:hunter2@db:5432/app	psql postgres://app:[REDACTED]@db:5432/app	database URL
+redis-cli -u redis://:hunter2@localhost:6379	redis-cli -u redis://:[REDACTED]@localhost:6379	empty user
+DATABASE_URL=postgres://app:hunter2@db/app ./run	DATABASE_URL=postgres://app:[REDACTED]@db/app ./run	URL in a harmless variable
+curl 'https://x/api?token=abc123&page=2'	curl 'https://x/api?token=[REDACTED]&page=2'	query parameter
+curl 'https://x/api?page=2&access_token=abc123'	curl 'https://x/api?page=2&access_token=[REDACTED]'	later parameter
+curl https://x/api?api_key=abc123	curl https://x/api?api_key=[REDACTED]	unquoted URL
+
+# --- JSON bodies ---
+curl -d '{"password":"hunter2"}' https://x	curl -d '{"password":"[REDACTED]"}' https://x	JSON string
+curl -d '{"user": "a", "api_key": "abc123"}' https://x	curl -d '{"user": "a", "api_key": "[REDACTED]"}' https://x	JSON with spaces
+curl -d '{"token": null}' https://x	=	not a string
+curl -d '{"password":""}' https://x	=	empty string
+
+# --- Known token formats, anywhere ---
+echo ghp_0123456789abcdefghijABCDEFGHIJ012345	echo [REDACTED]	GitHub classic token
+git push https://ghs_0123456789abcdefghijABCDEFGHIJ012345@github.com/o/r	git push https://[REDACTED]@github.com/o/r	GitHub token as the URL user
+echo github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz0123456789	echo [REDACTED]	GitHub fine-grained token
+echo glpat-abcdefghij0123456789	echo [REDACTED]	GitLab token
+echo xoxb-not-a-real-slack-token-0000	echo [REDACTED]	Slack token
+aws configure set aws_access_key_id AKIAIOSFODNN7EXAMPLE	aws configure set aws_access_key_id [REDACTED]	AWS access key id
+echo sk-ant-api03-abcdefghij0123456789ABCDEFGHIJ	echo [REDACTED]	Anthropic key
+echo sk-proj-abcdefghij0123456789ABCDEFGHIJ	echo [REDACTED]	OpenAI project key
+echo sk-abcdefghij0123456789ABCDEFGHIJ0123456789ab	echo [REDACTED]	OpenAI legacy key
+echo AIzaSyA0123456789abcdefghijABCDEFGHIJ01	echo [REDACTED]	Google API key
+echo sk_live_0123456789abcdefABCDEF	echo [REDACTED]	Stripe secret key
+echo npm_0123456789abcdefghijABCDEFGHIJ012345	echo [REDACTED]	npm token
+echo hf_abcdefghijABCDEFGHIJ0123456789ab	echo [REDACTED]	Hugging Face token
+tailscale up --authkey tskey-auth-kABCDEF1CNTRL-abcdefghij0123456789	tailscale up --authkey [REDACTED]	Tailscale key (also a flag value)
+curl -H "X-Id: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghij0123456789" x	curl -H "X-Id: [REDACTED]" x	JWT
+echo 'ghp_0123456789abcdefghijABCDEFGHIJ012345'	echo '[REDACTED]'	token in quotes
+gh auth login --with-token <<< ghp_0123456789abcdefghijABCDEFGHIJ012345	gh auth login --with-token <<< [REDACTED]	here-string
+echo xghp_0123456789abcdefghijABCDEFGHIJ012345	=	not at a word boundary
+
+# --- Cyrillic and other text around secrets ---
+почему API_KEY=abc123 не работает	почему API_KEY=[REDACTED] не работает	secret inside a Russian prompt
+PAROL=abc123	=	transliterated names are not recognised
