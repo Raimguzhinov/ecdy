@@ -2,7 +2,7 @@
 
 > From *ecdysis* — molting: an arthropod sheds its old shell in order to grow.
 
-**Status: early development (M4 — daemon and continuity). The conversation continues across the prompts of one shell; the agent does not see your shell history yet (M5).**
+**Status: early development (M5 — session context). The conversation continues across the prompts of one shell, and the agent sees your recent commands (secrets redacted, no output).**
 
 ecdy is a smart layer on top of your real shell. You keep typing in zsh with your own config,
 completion, highlighting and history. On Enter, ecdy decides whether the line is a shell command
@@ -17,6 +17,8 @@ It uses your agents' own logins and subscriptions; there is no ecdy cloud and no
 - A prompt is never executed as a command. When the classifier is unsure, it asks.
 - If the `ecdy` binary is missing, crashes or is too slow, zsh behaves exactly like vanilla zsh.
 - Every agent permission request is shown to you; nothing is allowed by default.
+- Secrets are redacted before your commands are logged or sent to the agent; command output is
+  never recorded.
 
 ## Usage
 
@@ -74,6 +76,9 @@ single prompt with `ecdy ask --agent codex -- ...`, or add and override agents i
 default_agent = "codex"
 idle_timeout = "30m"             # stop the session's agents after this long without prompts
 
+[context]
+commands = 20                    # recent commands sent with a prompt; 0 sends none
+
 [agents.claude]
 command = ["claude-agent-acp"]   # installed globally instead of npx
 ```
@@ -112,6 +117,24 @@ stops when the shell exits (even if it is killed), after `idle_timeout` without 
 `ecdy daemon stop`. Its socket lives in `$XDG_RUNTIME_DIR/ecdy/` (mode 0700; `$TMPDIR/ecdy-<uid>/`
 without `XDG_RUNTIME_DIR`). `ecdy ask` outside such a shell (no `ECDY_SESSION`, e.g. in a script)
 starts the agent for that one prompt.
+
+**Session context.** After every command the plugin records, in the background, the line you
+typed, its directory, exit status and duration to `$XDG_STATE_HOME/ecdy/sessions/<session>.jsonl`
+(`~/.local/state/…`, mode 0600). A prompt goes to the agent with a short block before it: the
+current directory, the git branch and the last `[context] commands` commands (default 20; at most
+4 KiB, each command cut to 512 bytes). The next prompt of the same conversation gets only the
+commands run since the previous one. `ecdy log` prints the session's log, `ecdy log --context` the
+block a new conversation would get here.
+
+- Secrets are replaced by `[REDACTED]` before the log is written and again when the block is
+  built: `*_TOKEN=`/`*_KEY=`/`*_PASSWORD=`-style assignments and flags, `Authorization:` and other
+  auth headers, passwords in URLs, `curl -u`, `mysql -p`, well-known token formats (GitHub, GitLab,
+  Slack, AWS, OpenAI, Anthropic, …), private key blocks. It is a heuristic: keep secrets out of
+  command lines when you can.
+- Not recorded: prompts, lines starting with a space when `HIST_IGNORE_SPACE` is set, and command
+  output (never).
+- The log is removed when the shell exits; logs of shells that were killed without cleanup are
+  removed after a week.
 
 Set `ECDY_LOG=debug` (or `info`, `warn`, `error`) to log protocol diagnostics to
 `$XDG_STATE_HOME/ecdy/ecdy.log` (`~/.local/state/ecdy/ecdy.log`).

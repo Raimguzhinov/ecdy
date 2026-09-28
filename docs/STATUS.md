@@ -1,6 +1,87 @@
 # Status
 
-## Current milestone: M4 — daemon and continuity
+## Current milestone: M5 — session context
+
+### Done
+
+- ADR 0004: how commands are recorded, where secrets are removed, where the context block is
+  built and how it is bounded.
+- `internal/sessionlog`:
+  - `Redact`: secrets → `[REDACTED]`, the text around them kept: private key blocks, known token
+    formats (GitHub, GitLab, Slack, AWS, Anthropic/OpenAI, Google, Stripe, npm, HF, Tailscale,
+    JWT), auth headers (`Authorization`, `Cookie`, `X-*-Key/Token`), URL passwords,
+    `NAME=value` / `--name[= ]value` / `"name": "value"` / `?name=value` when a word of the name
+    is secret (`key`, `token`, `secret`, `password`, …) and the last word does not say it is a
+    path, URL, id… (`_FILE`, `_URL`, `-stdin`), `curl -u`, `mysql -p`, `sshpass -p`,
+    `docker login -p`. Values that start with `$` are kept. Golden table
+    `testdata/redact.tsv` (152 cases, written first), multi-line cases, `FuzzRedact`
+    (idempotent, UTF-8, line count), benchmarks with pathological inputs (linear).
+  - `Log`: `<session>.jsonl` in `$XDG_STATE_HOME/ecdy/sessions` (0700/0600), records redacted on
+    write, `flock` on `<session>.lock` with a 2 s timeout, trimmed past 256 KiB (last 200
+    records), logs idle for 7 days pruned when a new one is created, read in end-time order.
+  - `BuildContext`: cwd, git branch (`.git/HEAD`, worktrees, no `git` process), the last N
+    commands after a given time, each redacted and then cut to 512 bytes, oldest dropped to fit
+    4 KiB.
+- Daemon: `Options.Context`; every turn sends the block as a text block before the prompt; each
+  conversation remembers the end of the last command it was sent (reset by a new ACP session).
+  `acpclient.Prompt` takes several text blocks. `RunOptions.EndSession` removes the log when the
+  shell is gone.
+- `ecdy log` (`--json`, `--context`), hidden `ecdy log record`; `daemon stop --end-session` also
+  removes the log. Config: `[context] commands` (default 20, 0 = none, at most 1000).
+- Plugin: `preexec` keeps the line, `$PWD`, `$EPOCHREALTIME`; `precmd` takes `$?` first and runs
+  `ecdy log record` in the background (`&!`). Not recorded: prompts, lines starting with a space
+  under `HIST_IGNORE_SPACE`. Before a prompt and in `zshexit` the plugin waits (up to 0.5 s) for
+  the recorders still running; `zshexit` kills the ones left; a hung one is forgotten after one wait.
+- Fixed on the way:
+  - `zshexit` ran in subshells: `(cd x; exit 1)` stopped the daemon and forgot the agent (M4).
+  - `zselect -t` returns 1 on a timeout, so `_ecdy_stop` waited 10 ms instead of up to 0.2 s for a
+    killed classifier (M2). `_ecdy_nap` replaces the pattern.
+  - GitHub push protection rejected a fake Slack token in the table; the fake tokens are shaped
+    so that it does not take them for real ones.
+- Fake agent: `Echo`/`History` use the last text block (the prompt); `fakeagent.Prompts` returns
+  every prompt's text blocks.
+- Tests: redactor table, fuzz and bench; log (modes, redaction on disk, order, torn lines, trim,
+  60 concurrent writers, lock timeout 0 and 200 ms, remove, prune); context (format, since, limit,
+  0 commands, 4 KiB bound with Cyrillic, redaction before cutting, git branch incl. worktrees);
+  config; `epoch` (zsh prints `$EPOCHREALTIME` with 10 fraction digits); `ecdy log`; daemon
+  `TestContext` (block before the prompt, since per conversation, reset by `ecdy new`, empty
+  block not sent); PTY on every zsh: records with `$?` behind another precmd hook, the agent's
+  context on the first and second prompt (no wait in the test: the plugin waits), no job notices,
+  `HIST_IGNORE_SPACE`, a hung recorder (prompt waits once, exit kills it), the log removed on
+  `exit` and on SIGKILL, a subshell `exit` mid-conversation.
+- Mutation check: 46 deliberate breakages (12 of the redactor, 34 of the log, context, daemon
+  and plugin), each run alone with `-timeout=60s`; the recorder waits on one CPU, where their
+  races show. 4 survived at first: a redundant check (removed), a curl rule and an anchor without
+  a table row (rows added; the anchor was hiding `helm --set db.password=…`, now redacted), and a
+  final cut the bounded head made unreachable (removed). Mutations that did not compile were
+  redone. All caught now.
+
+### Verified locally (2026-09-29)
+
+- `nix develop .#zsh-matrix -c go test -race ./...` — green (1:49);
+  `go test -race -count=20 ./shell/` on zsh 5.8.1, 5.9, 5.9.2 — green (5:38);
+  on one CPU (`taskset -c 0`, `-count=3`) `./shell/ ./internal/daemon/ ./internal/sessionlog/
+  ./cmd/ecdy/` — green (1:35) after fixing the two races it found (see above);
+  `golangci-lint run` — 0 issues; `nix build`, `nix flake check` — ok. No `ecdy daemon`, agent or
+  recorder left after any run.
+- Manual check with claude-agent-acp (npx) in zsh through the plugin:
+  `export DEMO_API_KEY=hunter2secret`, `(exit 7)`, then a prompt asking for both: "Your last
+  command exited with status 7, and the value of `DEMO_API_KEY` was redacted, so I can't see it."
+  `ecdy log --context` showed the same block; after `exit` no daemon, agent or log was left.
+
+### Known limitations
+
+- The redactor is a heuristic: a secret in an unrecognised form (a bare password argument, a
+  custom flag with an unusual name) reaches the log and the agent.
+- Command output is never captured (a separate ADR if it is ever wanted).
+- A prompt or `exit` right after a command may wait for its recorder (milliseconds; 0.5 s once
+  with a hung one).
+- A shell killed before its first prompt has no daemon to remove its log: the log stays until
+  the next session starts a log and prunes the ones idle for a week.
+- The prompt's `ecdy ask -- ...` line is not recorded, but a manually typed `ecdy ask` is.
+- Without `ECDY_SESSION` (scripts) the block has only cwd and git branch.
+
+## Done: M4 — daemon and continuity
 
 ### Done
 
@@ -72,7 +153,6 @@
 - A shell replaced by `exec` keeps its pid and skips zshexit: only the idle timeout stops its daemon.
 - `session/load` is not used: the conversation ends with the daemon (idle timeout, shell exit).
 - Two concurrent `ecdy use`/`ecdy new` may race on the state file (last write wins).
-- No session context in the prompt yet (M5).
 
 ## Done: M3 — ACP one-shot
 
@@ -232,7 +312,7 @@
 - `ECDY_SESSION` is not exported yet (M4).
 - `TestFirstKind` uses `/usr/bin:/bin` as `$PATH`, so it expects `ls` and `/bin/sh` there.
 
-## Next: M5 — session context
+## Next: M6 — client capabilities
 
-See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m5-context`.
-First task: the secret redactor's test table (tests first, AGENTS.md section 8).
+See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m6-capabilities`.
+First task: the ADR — implement `fs/*` and `terminal/*`, or leave the agent its own tools.

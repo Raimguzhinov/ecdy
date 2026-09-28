@@ -28,7 +28,7 @@ shutdown on `zshexit` and idle timeout. The conversation continues across prompt
 *DoD:* the second prompt sees the context of the first (test with the fake agent); no orphaned processes after the shell exits (test);
 switching agents works.
 
-**M5 — Session context.** preexec/precmd log, secret redactor (test table), context block in the prompt,
+**M5 — Session context.** ✅ preexec/precmd log, secret redactor (test table), context block in the prompt,
 `ecdy log` to view it.
 *DoD:* secret redactor tests; the block size is bounded; the agent sees the context (the fake agent checks it).
 
