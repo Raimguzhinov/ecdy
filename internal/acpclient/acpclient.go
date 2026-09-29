@@ -204,8 +204,14 @@ func (c *Conn) spawn() error {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	c.conn = acp.NewClientSideConnection(&client{c}, inW, &lineCounter{r: outR, count: &c.updates})
+	// The SDK starts reading in the constructor, before it has stored its
+	// own fields and before SetLogger, and does not synchronize either:
+	// nothing is read until both are done, which orders them before every
+	// handler (a data race otherwise, seen in fakeagent under -race).
+	ready := make(chan struct{})
+	c.conn = acp.NewClientSideConnection(&client{c}, inW, &lineCounter{r: outR, count: &c.updates, ready: ready})
 	c.conn.SetLogger(logger)
+	close(ready)
 
 	go func() {
 		c.waitErr = cmd.Wait()
@@ -647,9 +653,11 @@ type lineCounter struct {
 	r       io.Reader
 	count   *updateCount
 	partial []byte
+	ready   <-chan struct{} // closed once the connection is set up
 }
 
 func (l *lineCounter) Read(p []byte) (int, error) {
+	<-l.ready
 	n, err := l.r.Read(p)
 	data := p[:n]
 	for {

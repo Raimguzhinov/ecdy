@@ -75,6 +75,9 @@ func (t *Term) read() {
 
 func (t *Term) close() {
 	_ = t.cmd.Process.Kill()
+	// Before reaping: until then the pid, which is the session id, cannot
+	// be reused.
+	killSession(t.tb, t.cmd.Process.Pid)
 	t.reap()
 	_ = t.ptmx.Close()
 	<-t.done

@@ -158,11 +158,28 @@ func Main() {
 		signal.Ignore(syscall.SIGTERM)
 	}
 	a := &agent{script: s}
-	a.conn = acp.NewAgentSideConnection(a, os.Stdout, os.Stdin)
+	// The SDK starts reading in the constructor, before it has stored its
+	// own fields; a.conn and SetLogger come after it. Nothing is read
+	// until all three are done, or the handlers race with them (seen under
+	// -race: a.conn in Prompt, the SDK's conn in RequestPermission).
+	ready := make(chan struct{})
+	a.conn = acp.NewAgentSideConnection(a, os.Stdout, gatedReader{os.Stdin, ready})
 	a.conn.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	close(ready)
 	<-a.conn.Done()
 	time.Sleep(time.Duration(s.ExitDelayMS) * time.Millisecond)
 	os.Exit(0)
+}
+
+// gatedReader reads from r once ready is closed.
+type gatedReader struct {
+	r     io.Reader
+	ready <-chan struct{}
+}
+
+func (g gatedReader) Read(p []byte) (int, error) {
+	<-g.ready
+	return g.r.Read(p) //nolint:wrapcheck // a transparent reader: the SDK expects io.EOF as is
 }
 
 // WriteScript writes s to a file in dir and returns the environment entry
