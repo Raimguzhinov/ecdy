@@ -49,10 +49,15 @@
               zsh
               tmux
               nodejs # npx-launched ACP agents (claude-agent-acp, codex-acp)
+              # Third-party tools of the compatibility PTY tests.
+              atuin
+              fzf
             ];
             # Third-party zsh plugins loaded by the coexistence PTY tests.
             ECDY_TEST_ZSH_SYNTAX_HIGHLIGHTING = "${pkgs.zsh-syntax-highlighting}/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh";
             ECDY_TEST_ZSH_AUTOSUGGESTIONS = "${pkgs.zsh-autosuggestions}/share/zsh-autosuggestions/zsh-autosuggestions.zsh";
+            ECDY_TEST_ZSH_VI_MODE = "${pkgs.zsh-vi-mode}/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh";
+            ECDY_TEST_FZF_TAB = "${pkgs.zsh-fzf-tab}/share/fzf-tab/fzf-tab.plugin.zsh";
             # A GOROOT inherited from the user's environment would pair this
             # shell's go binary with a different standard library.
             shellHook = ''
