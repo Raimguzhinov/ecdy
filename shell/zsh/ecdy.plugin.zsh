@@ -33,6 +33,10 @@
 # conversation continues across prompts. The daemon is started by the first
 # prompt and stopped by the zshexit hook (docs/adr/0003-session-daemon.md).
 #
+# The plugin defines a function `ecdy` in front of the binary (unless one
+# exists): `ecdy doctor` also checks this shell, which only the shell can
+# see (_ecdy_doctor_probe).
+#
 # After every command, precmd runs `ecdy log record` in the background: the
 # line, its directory, exit status and duration go to the session's log,
 # secrets redacted, and the agent gets the recent ones with a prompt
@@ -384,6 +388,42 @@ _ecdy_line_init() {
   _ecdy_ind_reset || zle reset-prompt
   _ecdy_rps1_user=$RPS1 _ecdy_rps1_set=$RPS1
 }
+
+# _ecdy_doctor_probe — set REPLY to what `ecdy doctor` checks in this shell,
+# as key=value lines (internal/doctor): the widgets and keys ecdy relies on,
+# which plugins loaded later may have taken.
+_ecdy_doctor_probe() {
+  emulate -L zsh
+  local accept=''
+  # fzf-tab's accept-line key accepts through .accept-line, skipping ecdy.
+  zstyle -s ':fzf-tab:complete:' accept-line accept 2>/dev/null
+  local -a p=(
+    "zsh=$ZSH_VERSION"
+    "bin=${ECDY_BIN:-}"
+    "keymap=${${(z)$(bindkey -lL main)}[3]}"
+    "accept-line=${widgets[accept-line]:-none}"
+    "enter=${${(z)$(bindkey -M main '^M')}[2]}"
+    "alt-enter=${${(z)$(bindkey -M main '^[^M')}[2]}"
+    "question=${${(z)$(bindkey -M main '?')}[2]}"
+    "pre-redraw=${widgets[zle-line-pre-redraw]:-}"
+    "indicator=${ECDY_INDICATOR:-rprompt}"
+    "atuin=${+functions[_atuin_preexec]}"
+    "fzf-tab-accept-line=$accept"
+  )
+  REPLY=${(F)p}
+}
+
+if (( ! ${+functions[ecdy]} && ! ${+aliases[ecdy]} )); then
+  ecdy() {
+    if [[ $1 == doctor ]]; then
+      local REPLY
+      _ecdy_doctor_probe
+      ECDY_DOCTOR_ZSH=$REPLY command ${ECDY_BIN:-ecdy} "$@"
+    else
+      command ${ECDY_BIN:-ecdy} "$@"
+    fi
+  }
+fi
 
 # Alt+Enter: run the line as a command, skipping classification.
 _ecdy_force_command() {
