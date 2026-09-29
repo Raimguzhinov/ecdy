@@ -199,6 +199,26 @@ _ecdy_to_agent() {
   # finish (it takes milliseconds). A hung one is forgotten, so that it
   # delays one prompt, not every prompt.
   _ecdy_wait_recorders 50 || _ecdy_recorders=()
+  # Last: the screen is held from here until _ecdy_line_finish.
+  _ecdy_sync_begin
+}
+
+# Synchronized output (DEC private mode 2026,
+# https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036):
+# the terminal shows nothing new until the mode is reset, so the rewritten
+# line ZLE draws before _ecdy_line_finish writes the typed one over it never
+# appears on the screen. Terminals without the mode ignore both sequences.
+typeset -gi _ecdy_sync=0
+
+_ecdy_sync_begin() {
+  [[ $TERM != dumb ]] || return 0
+  print -rn -- $'\e[?2026h' 2>/dev/null >/dev/tty && _ecdy_sync=1
+}
+
+_ecdy_sync_end() {
+  (( _ecdy_sync )) || return 0
+  _ecdy_sync=0
+  print -rn -- $'\e[?2026l' 2>/dev/null >/dev/tty
 }
 
 # _ecdy_dialog — the Ask dialog: one line under the input, one key.
@@ -273,18 +293,22 @@ _ecdy_accept_line() {
 # shorter than the rewritten line already on screen, so it cannot scroll,
 # and ZLE's last redraw finds nothing to change.
 _ecdy_line_finish() {
-  # First take the indicator away, as that redraws the line: the accepted
-  # line keeps the user's own right prompt.
-  local verdict=$ECDY_VERDICT
-  _ecdy_ind_reset
-  [[ -z $verdict ]] || zle reset-prompt
-  [[ -n $_ECDY_SHOW ]] || return 0
-  local show=$_ECDY_SHOW
-  _ECDY_SHOW=''
-  [[ $BUFFER == $_ECDY_REWRITTEN && $TERM != dumb ]] || return 0
-  CURSOR=0
-  zle -R
-  print -rn -- $'\e7'"$show"$'\e[J\e8' 2>/dev/null >/dev/tty
+  {
+    # First take the indicator away, as that redraws the line: the accepted
+    # line keeps the user's own right prompt.
+    local verdict=$ECDY_VERDICT
+    _ecdy_ind_reset
+    [[ -z $verdict ]] || zle reset-prompt
+    [[ -n $_ECDY_SHOW ]] || return 0
+    local show=$_ECDY_SHOW
+    _ECDY_SHOW=''
+    [[ $BUFFER == $_ECDY_REWRITTEN && $TERM != dumb ]] || return 0
+    CURSOR=0
+    zle -R
+    print -rn -- $'\e7'"$show"$'\e[J\e8' 2>/dev/null >/dev/tty
+  } always {
+    _ecdy_sync_end
+  }
 }
 
 # The indicator. zle-line-pre-redraw runs before every redraw; when the line
@@ -501,6 +525,7 @@ _ecdy_zshexit() {
 # typed, continuation lines included (zshmisc, "Hook Functions").
 _ecdy_preexec() {
   emulate -L zsh
+  _ecdy_sync_end # in case zle-line-finish did not end it
   _ECDY_CMD=''
   if [[ -n $_ECDY_ASK_LINE && $1 == $_ECDY_ASK_LINE ]]; then
     _ECDY_ASK_LINE=''
@@ -557,6 +582,7 @@ _ecdy_precmd() {
   # First: $? is the status of the command. zsh gives every precmd function
   # that status, whatever the functions before it did (checked on 5.8.1-5.9.2).
   local st=$?
+  _ecdy_sync_end # a line dropped after _ecdy_sync_begin skips zle-line-finish
   _ecdy_record $st
   _ecdy_ind_reset
   # ZLE shows no right prompt for a line that started without one, even

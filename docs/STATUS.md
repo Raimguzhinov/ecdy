@@ -470,6 +470,14 @@ Decisions: [ADR 0006](adr/0006-ux.md).
 - `ECDY_SESSION` is not exported yet (M4).
 - `TestFirstKind` uses `/usr/bin:/bin` as `$PATH`, so it expects `ls` and `/bin/sh` there.
 
+## After M7: fixes
+
+- **The rewritten line flashed after Enter** (seen in a screen recording at 60 fps: two frames of
+  a highlighted `ecdy ask -- '...'` before the typed line was written over it). The plugin now
+  holds the screen with synchronized output (DEC mode 2026) from the rewrite to the end of
+  `zle-line-finish` ([ADR 0006](adr/0006-ux.md)); terminals without the mode are unchanged.
+  `TestSyncOutput`: red before the fix, green on zsh 5.8.1, 5.9 and 5.9.2.
+
 ## Next: M8 — other shells
 
 See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m8-shells`: bash

@@ -236,6 +236,39 @@ func testPrompt(t *testing.T, zsh string) {
 	z.Run(`? print -r -- hi`, askReply+"print -r -- hi")
 }
 
+// TestSyncOutput: the `ecdy ask -- '...'` that ZLE draws before the typed
+// line is written over it is inside synchronized output (DEC mode 2026),
+// so a terminal that supports it never shows it (docs/adr/0006-ux.md).
+func TestSyncOutput(t *testing.T) { forEachZsh(t, testSyncOutput) }
+
+func testSyncOutput(t *testing.T, zsh string) {
+	const begin, end = "\x1b[?2026h", "\x1b[?2026l"
+	check := func(t *testing.T, out string) {
+		t.Helper()
+		b, e := strings.Index(out, begin), strings.LastIndex(out, end)
+		drawn := strings.LastIndex(out, "ask -- ")
+		if b < 0 || e < 0 || drawn < b || drawn > e || strings.Count(out, begin) != strings.Count(out, end) {
+			t.Errorf("the rewritten line is not inside synchronized output:\n%q", out)
+		}
+	}
+	z := startZsh(t, zsh, zshOpts{})
+	z.Send("explain this error" + enter)
+	check(t, z.Expect(askReply+"explain this error"))
+	z.ExpectPrompt()
+	// Enter in the Ask dialog sends the line to the agent the same way.
+	z.Send("rm everything in tmp except configs" + enter)
+	z.Expect("destructive command")
+	z.Send(enter)
+	check(t, z.Expect(askReply+"rm everything in tmp except configs"))
+	z.ExpectPrompt()
+	// A command's line is not held.
+	z.Send(`print -r -- cmd-$((6*7))` + enter)
+	if out := z.Expect("cmd-42"); strings.Contains(out, begin) {
+		t.Errorf("a command started synchronized output:\n%q", out)
+	}
+	z.ExpectPrompt()
+}
+
 // TestForceCommand: Alt+Enter runs the line as a command, skipping the
 // classifier.
 func TestForceCommand(t *testing.T) { forEachZsh(t, testForceCommand) }
