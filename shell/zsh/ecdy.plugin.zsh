@@ -50,6 +50,7 @@ export ECDY_SHELL_PID=$$
 typeset -g _ECDY_ORIG=''      # the line the user typed, for zshaddhistory
 typeset -g _ECDY_REWRITTEN='' # what accept-line actually ran instead
 typeset -g _ECDY_ASK_LINE=''  # the same, for preexec: a prompt is not a command to record
+typeset -g _ECDY_SHOW=''      # the typed line to draw over the rewritten one
 typeset -g _ECDY_CMD='' _ECDY_CMD_CWD='' _ECDY_CMD_START='' # the command running now
 typeset -ga _ecdy_recorders=() # pids of `ecdy log record` that may still be running
 
@@ -172,6 +173,8 @@ _ecdy_to_agent() {
   BUFFER="${(q)${ECDY_BIN:-ecdy}} ask -- ${(qq)1}"
   _ECDY_REWRITTEN=$BUFFER
   _ECDY_ASK_LINE=$BUFFER
+  # Printable text only: zle shows control characters and newlines its own way.
+  [[ $_ECDY_ORIG == *[[:cntrl:]]* ]] || _ECDY_SHOW=$_ECDY_ORIG
   # The agent should see the command typed just before: let its recorder
   # finish (it takes milliseconds). A hung one is forgotten, so that it
   # delays one prompt, not every prompt.
@@ -238,6 +241,23 @@ _ecdy_accept_line() {
     (ask) _ecdy_dialog ;;
     (*) _ecdy_accept ;; # cmd, or anything unexpected
   esac
+}
+
+# Show the line as typed in the scrollback instead of the `ecdy ask -- ...`
+# it was rewritten to (docs/adr/0006-ux.md). ZLE has drawn the rewritten
+# line and redraws it once more after this hook, so it cannot be shown as
+# one text and run as another: the typed line is written over it, from the
+# start of the buffer, with the cursor saved and restored around it. It is
+# shorter than the rewritten line already on screen, so it cannot scroll,
+# and ZLE's last redraw finds nothing to change.
+_ecdy_line_finish() {
+  [[ -n $_ECDY_SHOW ]] || return 0
+  local show=$_ECDY_SHOW
+  _ECDY_SHOW=''
+  [[ $BUFFER == $_ECDY_REWRITTEN && $TERM != dumb ]] || return 0
+  CURSOR=0
+  zle -R
+  print -rn -- $'\e7'"$show"$'\e[J\e8' 2>/dev/null >/dev/tty
 }
 
 # Alt+Enter: run the line as a command, skipping classification.
@@ -357,7 +377,8 @@ zle -N ecdy-force-command _ecdy_force_command
 bindkey -M emacs '^[^M' ecdy-force-command
 bindkey -M viins '^[^M' ecdy-force-command
 
-autoload -Uz add-zsh-hook
+autoload -Uz add-zsh-hook add-zle-hook-widget
+add-zle-hook-widget line-finish _ecdy_line_finish
 add-zsh-hook zshaddhistory _ecdy_zshaddhistory
 add-zsh-hook preexec _ecdy_preexec
 add-zsh-hook precmd _ecdy_precmd
