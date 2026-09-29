@@ -331,19 +331,28 @@ func (c *Conn) Prompt(ctx context.Context, texts ...string) (acp.StopReason, err
 	return r.resp.StopReason, nil
 }
 
+// exitGrace is how long a failed request waits to see whether the agent is
+// gone. A request to an agent that has just exited can fail on the write to
+// its closed stdin (EPIPE, reported by the SDK as an internal error) before
+// its closed stdout is noticed.
+const exitGrace = 200 * time.Millisecond
+
 // connErr describes a failed request: if the agent is gone, as an ExitError
 // with its exit status and stderr.
 func (c *Conn) connErr(method string, err error) error {
+	grace := time.NewTimer(exitGrace)
+	defer grace.Stop()
 	select {
 	case <-c.conn.Done():
 		// The agent closed its output; it is exiting or useless.
-		c.signalGroup(syscall.SIGKILL)
-		<-c.exited
-		c.drain()
-		return &ExitError{Err: c.waitErr, Stderr: c.stderr.String()}
-	default:
+	case <-c.exited:
+	case <-grace.C:
 		return &RequestError{Method: method, Err: err}
 	}
+	c.signalGroup(syscall.SIGKILL)
+	<-c.exited
+	c.drain()
+	return &ExitError{Err: c.waitErr, Stderr: c.stderr.String()}
 }
 
 // RequestError is an error the agent answered a request with.
