@@ -1,6 +1,103 @@
 # Status
 
-## Current milestone: M6 — client capabilities
+## Current milestone: M7 — UX
+
+Decisions: [ADR 0006](adr/0006-ux.md).
+
+### Done
+
+- **Indicator.** While typing, `zle-line-pre-redraw` starts `ecdy classify` in the background
+  (process substitution watched with `zle -F -w`, the same arguments as Enter); a classifier for an
+  older line is killed. The verdict goes in front of RPS1 (`→ agent`, `? ask`, nothing for a
+  command) and the prompt is redrawn only when it changes. `ECDY_INDICATOR=rprompt|var|off`,
+  `ECDY_INDICATOR_{PROMPT,ASK,CMD}`, `$ECDY_VERDICT`. Enter still classifies synchronously.
+  Found on the way:
+  - ZLE shows no right prompt for a line that started without one, even after `reset-prompt`
+    (5.8.1–5.9.2): precmd sets an invisible `RPS1='%{%}'` when it is empty.
+  - An answer that arrived during the Ask dialog's `read -k` redrew the prompt over it: Enter
+    drops the pending classifier.
+  - Ctrl+C and Esc (`send-break`) skip `zle-line-finish`: the indicator is also reset in precmd
+    and `zle-line-init`, or it stuck to the next prompts.
+  - A classifier that writes part of an answer and hangs was left running: it is killed.
+- **Markdown** (`internal/render/markdown.go`), own streaming renderer, no dependency (glamour
+  renders whole documents only). Headings, emphasis (CommonMark flanking rules), code spans,
+  fenced code, bullet and task lists, quotes, rules, links, escapes; the rest as it is. Holds back
+  at most the rest of a line; an opener counts only if its closer follows on the line (so
+  `$((6*7))` keeps its `*`: the PTY tests caught the first version eating it). Escape sequences and
+  controls are removed from the agent's text on a terminal; a pipe gets the raw text.
+- **Live command output** with `-v` on a terminal: the last 5 lines of a running command's
+  `_meta` output under its status line, redrawn in place, each cut to the terminal width (`fit`:
+  tabs, East Asian wide characters); erased before anything else is printed. The open status line
+  is cut to the width too.
+- **Scrollback**: `zle-line-finish` writes the typed line over the rewritten `ecdy ask -- '…'`
+  (`CURSOR=0; zle -R`, then `ESC 7` line `ESC [J` `ESC 8`); the history already had it (M2).
+- **`ecdy doctor`** (`internal/doctor`, pure checks): the ecdy the plugin runs, the config, each
+  agent's command on `$PATH` (pi-acp also needs `pi`), zsh ≥ 5.8, and through the plugin's `ecdy`
+  function (`ECDY_DOCTOR_ZSH`) the shell: accept-line and Enter, Alt+Enter, `?` (atuin's AI), the
+  pre-redraw hook, atuin's history filter, fzf-tab's `accept-line`. `--agents` / `--agent NAME`
+  start agents for `initialize` + `session/new` in parallel with `--timeout` (default 1m).
+  Exit 1 on a failed check.
+- **Compatibility** (PTY, every zsh, each plugin loaded before and after ecdy): zsh-vi-mode 0.12.0,
+  fzf-tab 1.3.0, atuin 18.x (`--disable-ai`, `history_filter`): commands, prompts, the indicator,
+  the Ask dialog, Alt+Enter, history. Found: atuin binds `?` to its AI mode (takes ecdy's prefix)
+  and records prompts as `ecdy ask -- '…'`; fzf-tab's optional `accept-line` key accepts through
+  `.accept-line`, skipping the classifier. doctor reports all three; README says what to do.
+- Fixed on the way:
+  - `clean` let an escape sequence swallow the newline after it (found by `FuzzMarkdown`).
+  - `acpclient`: an agent that exited before `initialize` was written could be reported as
+    `initialize: Internal error: write |1: broken pipe` instead of its exit (20 of 50 runs on one
+    CPU): a failed request now waits up to 200 ms for the agent to be gone.
+- Tests: markdown table (68 cases) split at every byte and in random pieces, flush, `FuzzMarkdown`
+  (chunk independence, UTF-8, no controls, line count); live output and `fit` tables; `ecdy ask`
+  markdown and live output end to end in both modes; tmux screen tests (`shell/screen_test.go`,
+  what the terminal shows): scrollback incl. a wrapped rewritten line, indicator verdicts, custom
+  strings, `var`, `off` (no background classifier), Esc/Ctrl+C, fail-open (missing, hung, partial
+  answer; hung classifiers killed); compatibility; doctor unit table, `ecdy doctor` with fake agents
+  (ok, auth, silent, crash), `ecdy doctor` in zsh (healthy, accept-line reset, Alt+Enter taken,
+  atuin with AI, fzf-tab accept-line). devShell: zsh-vi-mode, fzf-tab, atuin, fzf.
+- Mutation check: about 60 deliberate breakages of the new code, each alone with `-timeout=60s`.
+  Survivors got tests (tail of the live view, a cut character at flush, an escaped delimiter, the
+  indicator on an accepted line, `off`, a partial answer); one removal that survived — dropping the
+  pending classifier on Enter — was a real bug that a later test caught. One equivalent mutant left:
+  redrawing a command's line over itself.
+
+### Verified locally (2026-09-29)
+
+- `nix develop .#zsh-matrix -c go test -race ./...` — green (2:02); `golangci-lint run` — 0 issues;
+  `nix build` (`ecdy c80713a`), `nix flake check` — ok. No `ecdy daemon`, agent or classifier left
+  after any run.
+- `-race -count=20 ./shell/` on zsh 5.8.1, 5.9, 5.9.2, as two runs of `-count=10` (7 min each): one
+  failure in each of two runs out of three attempts (the first one's log was lost to a `| tail`,
+  the second was `TestCompat/zsh-5.8.1/atuin/before`: the indicator's redraw printed the prompt but
+  not the line, see limitations), one attempt green. Not reproduced since: `TestCompat` `-race
+  -count=40` on the matrix (720 subtests) and on one CPU `-count=8` with `TestIndicator` — green.
+- One CPU (`taskset -c 0`, `-count=3`): `./shell/` (2:08), `./cmd/ecdy/ ./internal/acpclient/
+  ./internal/daemon/` — green after the acpclient fix above.
+- `FuzzMarkdown` 45 s + 40 s (~700 k inputs each), `FuzzClean` 30 s — green.
+- Manual check with claude-agent-acp (npx) in tmux: a markdown reply rendered as it streamed
+  (heading, bullets, bold, inline code, a go block); the scrollback showed the typed line;
+  `ecdy doctor --agent claude`: every shell check ✓, `login claude: started, session created`.
+
+### Known limitations
+
+- Rarely (once in ~1100 runs, only on zsh 5.8.1 with atuin loaded, not reproduced on purpose) the
+  indicator's redraw stops after the prompt, leaving the line blank until the next key. Probably
+  the same zsh behaviour as M2's blank prompt (a child exiting during a redraw); waiting for the
+  classifier inside the `zle -F` handler does not work (signals are queued there, every answer
+  waited 0.2 s), so it was left as is.
+- zsh hides RPROMPT when the line reaches it: no indicator on long lines.
+- `zle reset-prompt` re-expands the user's prompt at each verdict change (costly with slow prompts;
+  `ECDY_INDICATOR=off` or `var`).
+- A line dropped by Ctrl+C keeps its indicator on the screen (zsh runs no hook for it).
+- Markdown: a subset; emphasis and code spans do not cross lines; after an opener the rest of
+  the line waits for its closer; no syntax highlighting, no reflow, tables as they are.
+- Live output: a terminal resize during a command may leave a stale row.
+- The typed line in the scrollback has no syntax highlighting; a rewritten line that wrapped may
+  leave a blank row.
+- doctor cannot tell whether a widget that wraps accept-line calls ecdy's; it says so.
+- In a shell with the plugin `ecdy` is a function; `command ecdy doctor` skips the shell checks.
+
+## Done: M6 — client capabilities
 
 ### Done
 
@@ -365,7 +462,7 @@
 - `ECDY_SESSION` is not exported yet (M4).
 - `TestFirstKind` uses `/usr/bin:/bin` as `$PATH`, so it expects `ls` and `/bin/sh` there.
 
-## Next: M7 — UX
+## Next: M8 — other shells
 
-See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m7-ux`: live
-classification indicator, markdown rendering, `ecdy doctor`; also live command output (ADR 0005).
+See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m8-shells`: bash
+(ble.sh or `bind -x`), then fish; the classifier is shared, each shell gets its own integration.
