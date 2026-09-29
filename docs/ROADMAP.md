@@ -32,9 +32,13 @@ switching agents works.
 `ecdy log` to view it.
 *DoD:* secret redactor tests; the block size is bounded; the agent sees the context (the fake agent checks it).
 
-**M6 — Client capabilities.** ADR: do we implement `fs/*` and `terminal/*`, or leave the agent its own tools?
+**M6 — Client capabilities.** ✅ ADR: do we implement `fs/*` and `terminal/*`, or leave the agent its own tools?
 If we implement them, `terminal/*` runs commands in a PTY with the user's env and cwd and shows them in the terminal.
-*DoD:* per the ADR.
+Decided in [ADR 0005](adr/0005-client-capabilities.md): not implemented, the agent keeps its own tools; command output
+that agents send in `_meta` is shown with `-v`; `pi` preset (pi-acp adapter).
+*DoD:* per the ADR: no capabilities declared (test); an agent calling `fs/*`/`terminal/*` anyway gets `method not found`,
+nothing is read, written or run, and the turn goes on (test); `_meta` command output shown with `-v`, cleaned of escape
+sequences (tests, both `ecdy ask` modes).
 
 **M7 — UX.** Live classification indicator while typing (`zle-line-pre-redraw` + RPROMPT, only cheap checks on the zsh side),
 markdown rendering, `ecdy doctor` (checks PATH, agents, login, zsh version, plugin conflicts).

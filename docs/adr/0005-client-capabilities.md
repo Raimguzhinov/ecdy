@@ -81,7 +81,7 @@ code executes on the agent's behalf.
   extensions' questions become permission requests). The README says so next to the preset.
 - The agent's commands run in the agent's environment: the env of the `ecdy ask` that started the
   daemon (STATUS.md, M4 limitations), not the shell's current one.
-- `-v` shows command output for every preset; showing it live while the command runs is left to
-  M7's rendering work.
+- With `-v`, command output is shown for claude (text content) and for codex and pi (`_meta`),
+  after the command finishes; showing it live while the command runs is left to M7's rendering.
 - An agent that requires the capabilities to function will fail its tool calls under ecdy; the
   `method not found` error names the method, and how it surfaces is up to the agent.

@@ -56,8 +56,13 @@ exactly like in vanilla zsh.
 ## Agents
 
 A prompt runs `ecdy ask -- '<prompt>'`, which sends it to the agent and streams the reply. Tool calls appear as one status line each
-(`⚙ Read main.go ✓`, `$ go test ./... ✗`); `ecdy ask -v` also shows thoughts, plans, tool output and
-the agent's stderr.
+(`⚙ Read main.go ✓`, `$ go test ./... ✗`); `ecdy ask -v` also shows thoughts, plans, tool output (the
+last 20 lines of a command's output, with escape sequences and control characters removed) and the
+agent's stderr.
+
+The agent reads files, edits them and runs commands with its own tools and asks for permission its own
+way; ecdy shows those requests but does not offer the agent its file system or terminal (ACP's `fs/*`
+and `terminal/*`, see [ADR 0005](docs/adr/0005-client-capabilities.md)).
 
 Built-in agents (the launch commands of the [ACP Registry](https://github.com/agentclientprotocol/registry)):
 
