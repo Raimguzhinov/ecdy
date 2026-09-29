@@ -62,8 +62,46 @@ func (s *screen) run(args ...string) string {
 // send types text and presses Enter.
 func (s *screen) send(text string) {
 	s.t.Helper()
-	s.run("send-keys", "-l", text)
+	s.typeText(text)
 	s.run("send-keys", "Enter")
+}
+
+// typeText types text without pressing Enter.
+func (s *screen) typeText(text string) {
+	s.t.Helper()
+	s.run("send-keys", "-l", text)
+}
+
+// clearLine empties the line being edited (Ctrl+U).
+func (s *screen) clearLine() {
+	s.t.Helper()
+	s.run("send-keys", "C-u")
+}
+
+// row returns the last screen row that starts with the test prompt, with
+// the spaces between the line and the right prompt squeezed to one.
+func (s *screen) row(scr string) string {
+	rows := regexp.MustCompile(`(?m)^`+promptMark+`.*$`).FindAllString(scr, -1)
+	if len(rows) == 0 {
+		return ""
+	}
+	return regexp.MustCompile(` {2,}`).ReplaceAllString(rows[len(rows)-1], " ")
+}
+
+// waitRow waits until the prompt row, squeezed, ends with want.
+func (s *screen) waitRow(want string) {
+	s.t.Helper()
+	deadline := time.Now().Add(testutil.DefaultTimeout)
+	for {
+		scr := s.capture()
+		if strings.HasSuffix(s.row(scr), want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("the prompt row does not end with %q:\n%s", want, scr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // capture returns the pane's rows, trailing spaces removed.
@@ -114,5 +152,117 @@ func testScrollback(t *testing.T, zsh string) {
 	}
 	if strings.Contains(scr, "ecdy ask") {
 		t.Errorf("the rewritten line is on the screen:\n%s", scr)
+	}
+}
+
+// TestIndicator: while typing, the right prompt shows what Enter will do,
+// computed by the classifier in the background (docs/adr/0006-ux.md).
+func TestIndicator(t *testing.T) { forEachZsh(t, testIndicator) }
+
+func testIndicator(t *testing.T, zsh string) {
+	t.Run("verdicts", func(t *testing.T) {
+		s := startScreen(t, zsh, zshOpts{rc: "RPS1=R"}, 80)
+		s.waitRow("% R")
+		s.typeText("explain this error")
+		s.waitRow("% explain this error → agent R")
+		s.clearLine()
+		s.typeText("ls -la")
+		s.waitRow("% ls -la R") // a command: nothing by default
+		s.clearLine()
+		s.typeText("rm everything in tmp except configs")
+		s.waitRow("% rm everything in tmp except configs ? ask R")
+		s.clearLine()
+		s.waitRow("% R")
+		// Accepted, the line keeps only the user's right prompt.
+		s.send("explain this error")
+		scr := s.wait(askReply + "explain this error")
+		if !strings.Contains(scr, "% explain this error\n") || strings.Contains(scr, "→ agent") {
+			t.Errorf("the indicator stayed on the accepted line:\n%s", scr)
+		}
+		s.waitRow("% R")
+	})
+	t.Run("custom", func(t *testing.T) {
+		s := startScreen(t, zsh, zshOpts{rc: "RPS1=R", after: "ECDY_INDICATOR_CMD='[cmd]' ECDY_INDICATOR_PROMPT='[ai]'"}, 80)
+		s.typeText("explain")
+		s.waitRow("% explain [ai] R")
+		s.clearLine()
+		s.typeText("print -r -- ok-$((6*7))")
+		s.waitRow("% print -r -- ok-$((6*7)) [cmd] R")
+		// Accepted, the line keeps only the user's right prompt.
+		s.run("send-keys", "Enter")
+		scr := s.wait("ok-42")
+		if !regexp.MustCompile(`% print -r -- ok-\$\(\(6\*7\)\) +R\nok-42`).MatchString(scr) || strings.Contains(scr, "[cmd]") {
+			t.Errorf("the indicator stayed on the accepted line:\n%s", scr)
+		}
+	})
+	t.Run("var", func(t *testing.T) {
+		s := startScreen(t, zsh, zshOpts{rc: "setopt PROMPT_SUBST; RPS1='<$ECDY_VERDICT>'", after: "ECDY_INDICATOR=var"}, 80)
+		s.waitRow("% <>")
+		s.typeText("explain this error")
+		s.waitRow("% explain this error <prompt>")
+	})
+	t.Run("off", func(t *testing.T) {
+		// No classifier runs while typing: only Enter's.
+		dir := t.TempDir()
+		calls := filepath.Join(dir, "calls")
+		counting := "#!/bin/sh\n[ \"$1\" = classify ] && echo x >>" + calls + "\nexec " + ecdyBin + " \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(dir, "ecdy"), []byte(counting), 0o755); err != nil { //nolint:gosec // a test executable
+			t.Fatal(err)
+		}
+		s := startScreen(t, zsh, zshOpts{rc: "RPS1=R", after: "ECDY_INDICATOR=off ECDY_BIN=" + filepath.Join(dir, "ecdy")}, 80)
+		s.typeText("print -r -- off-$((6*7))")
+		s.waitRow("% print -r -- off-$((6*7)) R")
+		time.Sleep(300 * time.Millisecond) // an indicator would have started by now
+		s.run("send-keys", "Enter")
+		s.wait("off-42")
+		if data, _ := os.ReadFile(calls); string(data) != "x\n" {
+			t.Errorf("classifier runs: %q, want only Enter's", data)
+		}
+	})
+}
+
+// TestIndicatorFailOpen: without a working classifier there is no
+// indicator, and typing and Enter work as usual.
+func TestIndicatorFailOpen(t *testing.T) { forEachZsh(t, testIndicatorFailOpen) }
+
+func testIndicatorFailOpen(t *testing.T, zsh string) {
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	// Classify nothing: record the call and hang, before or after writing
+	// part of an answer.
+	scripts := map[string]string{
+		"slow":    "#!/bin/sh\n[ \"$1\" = classify ] || exit 0\necho \"$$\" >>" + calls + "\nexec sleep 30\n",
+		"partial": "#!/bin/sh\n[ \"$1\" = classify ] || exit 0\necho \"$$\" >>" + calls + "\nprintf 'prompt\\000'\nexec sleep 30\n",
+	}
+	for name, body := range scripts {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil { //nolint:gosec // a test executable
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		name string
+		opts zshOpts
+	}{
+		{"missing", zshOpts{load: "source " + sourceFile(t), path: "/usr/bin:/bin:" + filepath.Dir(zsh), rc: "RPS1=R"}},
+		{"hung", zshOpts{rc: "RPS1=R", after: "ECDY_BIN=" + filepath.Join(dir, "slow") + " ECDY_CLASSIFY_TIMEOUT=0.2"}},
+		{"partial", zshOpts{rc: "RPS1=R", after: "ECDY_BIN=" + filepath.Join(dir, "partial") + " ECDY_CLASSIFY_TIMEOUT=0.2"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := startScreen(t, zsh, tt.opts, 80)
+			s.typeText("explain")
+			s.waitRow("% explain R")
+			s.typeText(" this")
+			s.waitRow("% explain this R")
+			s.clearLine()
+			s.send("print -r -- typed-$((6*7))")
+			s.wait("typed-42")
+			s.waitRow("% R")
+			// Each hung classifier was killed when the line changed.
+			data, _ := os.ReadFile(calls)
+			for _, f := range strings.Fields(string(data)) {
+				pid, _ := strconv.Atoi(f)
+				waitGone(t, pid)
+			}
+		})
 	}
 }

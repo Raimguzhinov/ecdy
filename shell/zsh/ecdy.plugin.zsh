@@ -16,6 +16,17 @@
 # Settings (set before loading):
 #   ECDY_BIN               ecdy executable (default: `ecdy` from $PATH)
 #   ECDY_CLASSIFY_TIMEOUT  classification deadline in seconds (default: 0.5)
+#   ECDY_INDICATOR         rprompt (default): what Enter will do is shown in
+#                          front of RPROMPT while typing; var: only set
+#                          $ECDY_VERDICT (cmd, prompt, ask or empty) and redraw,
+#                          for a theme that draws it; off: nothing, no forks
+#   ECDY_INDICATOR_PROMPT, ECDY_INDICATOR_ASK, ECDY_INDICATOR_CMD
+#                          the indicator per verdict, prompt escapes allowed
+#                          (defaults: '%F{magenta}→ agent%f', '%F{yellow}? ask%f', '')
+#
+# The indicator runs `ecdy classify` in the background on every change of the
+# line, the way Enter does, and never delays typing; Enter classifies again
+# and decides (docs/adr/0006-ux.md).
 #
 # Every shell that loads the plugin is a session: it exports ECDY_SESSION and
 # ECDY_SHELL_PID, so that `ecdy ask` talks to this session's daemon and the
@@ -51,6 +62,11 @@ typeset -g _ECDY_ORIG=''      # the line the user typed, for zshaddhistory
 typeset -g _ECDY_REWRITTEN='' # what accept-line actually ran instead
 typeset -g _ECDY_ASK_LINE=''  # the same, for preexec: a prompt is not a command to record
 typeset -g _ECDY_SHOW=''      # the typed line to draw over the rewritten one
+typeset -g ECDY_VERDICT=''     # the indicator's verdict for the line being typed
+typeset -g _ecdy_ind_fd='' _ecdy_ind_pid='' # the background classifier, if any
+typeset -g _ecdy_ind_buf=''    # the line it classifies (or classified last)
+typeset -g _ecdy_ind_text=''   # the indicator shown
+typeset -g _ecdy_rps1_user='' _ecdy_rps1_set='' # RPS1 without and with it
 typeset -g _ECDY_CMD='' _ECDY_CMD_CWD='' _ECDY_CMD_START='' # the command running now
 typeset -ga _ecdy_recorders=() # pids of `ecdy log record` that may still be running
 
@@ -251,6 +267,14 @@ _ecdy_accept_line() {
 # shorter than the rewritten line already on screen, so it cannot scroll,
 # and ZLE's last redraw finds nothing to change.
 _ecdy_line_finish() {
+  # First take the indicator away, as that redraws the line: the accepted
+  # line keeps the user's own right prompt.
+  _ecdy_ind_cancel
+  if [[ -n $_ecdy_ind_text || -n $ECDY_VERDICT ]]; then
+    ECDY_VERDICT='' _ecdy_ind_text=''
+    [[ $RPS1 == $_ecdy_rps1_set ]] && RPS1=$_ecdy_rps1_user
+    zle reset-prompt
+  fi
   [[ -n $_ECDY_SHOW ]] || return 0
   local show=$_ECDY_SHOW
   _ECDY_SHOW=''
@@ -258,6 +282,95 @@ _ecdy_line_finish() {
   CURSOR=0
   zle -R
   print -rn -- $'\e7'"$show"$'\e[J\e8' 2>/dev/null >/dev/tty
+}
+
+# The indicator. zle-line-pre-redraw runs before every redraw; when the line
+# has changed, the classifier for the old line is dropped and a new one is
+# started in the background, its output watched with `zle -F` (zshzle,
+# "zle -F"; zsh-autosuggestions' async mode does the same). The answer
+# comes to _ecdy_ind_ready, a widget, which may redraw the prompt.
+_ecdy_ind_on() { [[ ${ECDY_INDICATOR:-rprompt} == (rprompt|var) && $TERM != dumb ]] }
+
+_ecdy_ind_cancel() {
+  if [[ -n $_ecdy_ind_fd ]]; then
+    zle -F $_ecdy_ind_fd 2>/dev/null
+    exec {_ecdy_ind_fd}<&-
+    _ecdy_ind_fd=''
+  fi
+  if [[ -n $_ecdy_ind_pid ]]; then
+    kill $_ecdy_ind_pid 2>/dev/null
+    _ecdy_ind_pid=''
+  fi
+}
+
+_ecdy_pre_redraw() {
+  _ecdy_ind_on || return 0
+  [[ $BUFFER == $_ecdy_ind_buf ]] && return 0
+  emulate -L zsh
+  _ecdy_ind_buf=$BUFFER
+  _ecdy_ind_cancel
+  local bin=${ECDY_BIN:-ecdy} REPLY
+  if [[ $CONTEXT != start || -n $PREBUFFER || -z ${BUFFER//[[:space:]]/} ]] ||
+     ! whence -p -- $bin >/dev/null 2>&1; then
+    _ecdy_ind_show ''
+    return 0
+  fi
+  _ecdy_first_kind $BUFFER
+  # As in _ecdy_classify: the subshell reports its pid and execs ecdy.
+  exec {_ecdy_ind_fd}< <(
+    print -rn -- "${sysparams[pid]:-}"$'\0'
+    exec command $bin classify --shell=zsh --format=nul --first-kind=$REPLY -- $BUFFER 2>/dev/null
+  ) || { _ecdy_ind_fd=''; return 0; }
+  IFS= read -r -d '' -t 1 -u $_ecdy_ind_fd _ecdy_ind_pid
+  zle -F -w $_ecdy_ind_fd _ecdy_ind_ready
+}
+
+# The classifier's answer (or its end: $2 is set on an error or a hangup
+# without data). A half-written answer is read with a deadline, so a hung
+# classifier cannot freeze the line.
+_ecdy_ind_ready() {
+  emulate -L zsh
+  local fd=$1 field
+  local -a fields
+  zle -F $fd 2>/dev/null
+  if [[ $fd == $_ecdy_ind_fd ]]; then
+    while IFS= read -r -d '' -t ${ECDY_CLASSIFY_TIMEOUT:-0.5} -u $fd field; do
+      fields+=("$field")
+    done
+    # An answer cut short: the classifier may hang after it.
+    (( $#fields == 5 )) || kill $_ecdy_ind_pid 2>/dev/null
+    _ecdy_ind_pid=''
+    _ecdy_ind_fd=''
+  fi
+  exec {fd}<&-
+  (( $#fields == 5 )) || fields=('')
+  _ecdy_ind_show $fields[1]
+}
+
+# _ecdy_ind_show VERDICT — show the indicator for VERDICT (empty: none),
+# redrawing the prompt only when it changes.
+_ecdy_ind_show() {
+  local text
+  case $1 in
+    (prompt) text=${ECDY_INDICATOR_PROMPT-'%F{magenta}→ agent%f'} ;;
+    (ask)    text=${ECDY_INDICATOR_ASK-'%F{yellow}? ask%f'} ;;
+    (cmd)    text=${ECDY_INDICATOR_CMD-} ;;
+  esac
+  [[ $1 == $ECDY_VERDICT && $text == $_ecdy_ind_text ]] && return 0
+  ECDY_VERDICT=$1 _ecdy_ind_text=$text
+  if [[ ${ECDY_INDICATOR:-rprompt} == rprompt ]]; then
+    # A theme may have changed RPS1 since (a vi-mode marker): that is the
+    # user's part now.
+    [[ $RPS1 == $_ecdy_rps1_set ]] || _ecdy_rps1_user=$RPS1
+    RPS1="$text${text:+${_ecdy_rps1_user:+ }}$_ecdy_rps1_user"
+    _ecdy_rps1_set=$RPS1
+  fi
+  zle && zle reset-prompt
+}
+
+_ecdy_line_init() {
+  _ecdy_ind_buf='' ECDY_VERDICT='' _ecdy_ind_text=''
+  _ecdy_rps1_user=$RPS1 _ecdy_rps1_set=$RPS1
 }
 
 # Alt+Enter: run the line as a command, skipping classification.
@@ -364,6 +477,9 @@ _ecdy_precmd() {
   # that status, whatever the functions before it did (checked on 5.8.1-5.9.2).
   local st=$?
   _ecdy_record $st
+  # ZLE shows no right prompt for a line that started without one, even
+  # after reset-prompt (seen on 5.8.1-5.9.2): give it an invisible one.
+  [[ -n $RPS1 || ${ECDY_INDICATOR:-rprompt} != rprompt ]] || RPS1='%{%}'
   [[ -n $_ECDY_HISTORY_PENDING ]] || return 0
   print -sr -- $_ECDY_HISTORY_PENDING
   _ECDY_HISTORY_PENDING=''
@@ -379,6 +495,9 @@ bindkey -M viins '^[^M' ecdy-force-command
 
 autoload -Uz add-zsh-hook add-zle-hook-widget
 add-zle-hook-widget line-finish _ecdy_line_finish
+add-zle-hook-widget line-init _ecdy_line_init
+add-zle-hook-widget line-pre-redraw _ecdy_pre_redraw
+zle -N _ecdy_ind_ready
 add-zsh-hook zshaddhistory _ecdy_zshaddhistory
 add-zsh-hook preexec _ecdy_preexec
 add-zsh-hook precmd _ecdy_precmd
