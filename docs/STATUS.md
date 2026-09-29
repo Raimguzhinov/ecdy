@@ -19,6 +19,15 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   - Ctrl+C and Esc (`send-break`) skip `zle-line-finish`: the indicator is also reset in precmd
     and `zle-line-init`, or it stuck to the next prompts.
   - A classifier that writes part of an answer and hangs was left running: it is killed.
+  - The indicator's redraw sometimes stopped after the prompt, the line blank until the next key
+    (CI, zsh 5.9.2 with fzf-tab; twice locally in `-count=20`). Cause, read in zsh's source and
+    reproduced: zsh's signal handlers do not restart system calls (`sa_flags = 0`), so a SIGCHLD
+    arriving as ZLE writes makes the write fail, and the rest stays in its stdio buffer. The
+    classifier exits right after its answer, i.e. right as the redraw starts. The redraw now waits
+    until the classifier is a zombie (its state read from `/proc`, no fork: zsh defers reaping
+    inside a widget, so `kill -0` cannot tell; without `/proc` a 10 ms nap); a cancelled one too.
+    `TestIndicatorSignals` (a classifier sending SIGCHLD until it exits, a 40 KB invisible prompt
+    to make each redraw long): 6 of 20 blank before, 0 after.
 - **Markdown** (`internal/render/markdown.go`), own streaming renderer, no dependency (glamour
   renders whole documents only). Headings, emphasis (CommonMark flanking rules), code spans,
   fenced code, bullet and task lists, quotes, rules, links, escapes; the rest as it is. Holds back
@@ -58,8 +67,9 @@ Decisions: [ADR 0006](adr/0006-ux.md).
 - Mutation check: about 60 deliberate breakages of the new code, each alone with `-timeout=60s`.
   Survivors got tests (tail of the live view, a cut character at flush, an escaped delimiter, the
   indicator on an accepted line, `off`, a partial answer); one removal that survived — dropping the
-  pending classifier on Enter — was a real bug that a later test caught. One equivalent mutant left:
-  redrawing a command's line over itself.
+  pending classifier on Enter — was a real bug that a later test caught. Left: one equivalent
+  mutant (redrawing a command's line over itself) and one of speed only (a zombie not recognized:
+  every redraw waits the full 0.1 s).
 
 ### Verified locally (2026-09-29)
 
@@ -80,11 +90,9 @@ Decisions: [ADR 0006](adr/0006-ux.md).
 
 ### Known limitations
 
-- Rarely (once in ~1100 runs, only on zsh 5.8.1 with atuin loaded, not reproduced on purpose) the
-  indicator's redraw stops after the prompt, leaving the line blank until the next key. Probably
-  the same zsh behaviour as M2's blank prompt (a child exiting during a redraw); waiting for the
-  classifier inside the `zle -F` handler does not work (signals are queued there, every answer
-  waited 0.2 s), so it was left as is.
+- Any other signal arriving as ZLE redraws (a job of the user's ending, say) can still leave the
+  rest of the line blank until the next key: that is zsh's behaviour, not ecdy's; the plugin only
+  keeps its own children out of its redraws.
 - zsh hides RPROMPT when the line reaches it: no indicator on long lines.
 - `zle reset-prompt` re-expands the user's prompt at each verdict change (costly with slow prompts;
   `ECDY_INDICATOR=off` or `var`).
