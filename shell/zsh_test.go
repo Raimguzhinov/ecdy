@@ -120,7 +120,30 @@ type zshTerm struct {
 // plugin by sending a `source` line, as a user's .zshrc would.
 func startZsh(t *testing.T, zsh string, o zshOpts) *zshTerm {
 	t.Helper()
-	home := t.TempDir()
+	cmd, rcPath, home, runtime := zshSetup(t, zsh, o)
+	z := &zshTerm{Term: testutil.StartTerm(t, cmd), t: t, home: home, runtime: runtime}
+	z.Diag = func() string {
+		var b strings.Builder
+		b.WriteString("files in $HOME:\n")
+		entries, _ := os.ReadDir(home)
+		for _, e := range entries {
+			info, _ := e.Info()
+			fmt.Fprintf(&b, "  %s %d %s\n", e.Name(), info.Size(), info.ModTime().Format("15:04:05.000"))
+		}
+		return b.String()
+	}
+	z.Send(" source " + rcPath + enter)
+	z.Expect("loaded-42")
+	z.ExpectPrompt()
+	return z
+}
+
+// zshSetup prepares a test shell: a temporary $HOME with the rc file to
+// source, a runtime directory whose daemons are stopped at cleanup, and the
+// command that starts zsh there.
+func zshSetup(t *testing.T, zsh string, o zshOpts) (cmd *exec.Cmd, rcPath, home, runtime string) {
+	t.Helper()
+	home = t.TempDir()
 	if o.path == "" {
 		o.path = filepath.Dir(ecdyBin) + string(os.PathListSeparator) + os.Getenv("PATH")
 	}
@@ -141,12 +164,13 @@ func startZsh(t *testing.T, zsh string, o zshOpts) *zshTerm {
 		o.after,
 		`print -r -- loaded-$((40+2))`,
 	}, "\n")
-	rcPath := filepath.Join(home, "rc.zsh")
+	rcPath = filepath.Join(home, "rc.zsh")
 	if err := os.WriteFile(rcPath, []byte(rc+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Not t.TempDir(): a unix socket path must be short.
-	runtime, err := os.MkdirTemp("", "ecdy-rt")
+	var err error
+	runtime, err = os.MkdirTemp("", "ecdy-rt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +185,7 @@ func startZsh(t *testing.T, zsh string, o zshOpts) *zshTerm {
 	if o.agent == nil {
 		o.agent = agentEnv
 	}
-	cmd := exec.Command(zsh, "-f", "-i")
+	cmd = exec.Command(zsh, "-f", "-i")
 	cmd.Dir = home
 	cmd.Env = append([]string{
 		"HOME=" + home,
@@ -171,21 +195,7 @@ func startZsh(t *testing.T, zsh string, o zshOpts) *zshTerm {
 		"LC_ALL=C.UTF-8",
 		"XDG_RUNTIME_DIR=" + runtime,
 	}, o.agent...)
-	z := &zshTerm{Term: testutil.StartTerm(t, cmd), t: t, home: home, runtime: runtime}
-	z.Diag = func() string {
-		var b strings.Builder
-		b.WriteString("files in $HOME:\n")
-		entries, _ := os.ReadDir(home)
-		for _, e := range entries {
-			info, _ := e.Info()
-			fmt.Fprintf(&b, "  %s %d %s\n", e.Name(), info.Size(), info.ModTime().Format("15:04:05.000"))
-		}
-		return b.String()
-	}
-	z.Send(" source " + rcPath + enter)
-	z.Expect("loaded-42")
-	z.ExpectPrompt()
-	return z
+	return cmd, rcPath, home, runtime
 }
 
 // ExpectPrompt waits for a fresh prompt.

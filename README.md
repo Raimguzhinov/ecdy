@@ -2,7 +2,7 @@
 
 > From *ecdysis* — molting: an arthropod sheds its old shell in order to grow.
 
-**Status: early development (M5 — session context). The conversation continues across the prompts of one shell, and the agent sees your recent commands (secrets redacted, no output).**
+**Status: early development (M7 — UX). The conversation continues across the prompts of one shell, the agent sees your recent commands (secrets redacted, no output), the right prompt shows what Enter will do, and `ecdy doctor` checks the setup.**
 
 ecdy is a smart layer on top of your real shell. You keep typing in zsh with your own config,
 completion, highlighting and history. On Enter, ecdy decides whether the line is a shell command
@@ -34,7 +34,7 @@ Or source `shell/zsh/ecdy.plugin.zsh` from a plugin manager; it looks for `ecdy`
 On Enter, ecdy classifies the line:
 
 - a **command** runs as usual;
-- a **prompt** runs as `ecdy ask -- '<prompt>'`; the history keeps the line you typed;
+- a **prompt** runs as `ecdy ask -- '<prompt>'`; the screen and the history keep the line you typed;
 - when it is **not sure**, a dialog appears under the line and nothing runs until you choose:
   `⏎ agent · r run · e edit · Esc cancel` (plus `f fix` when the first word looks like a typo,
   e.g. `gti status`). Enter sends the line to the agent.
@@ -42,23 +42,53 @@ On Enter, ecdy classifies the line:
 Overrides: start the line with `?` to force a prompt; press **Alt+Enter** to run it as a command
 without classification.
 
+**Indicator.** While you type, the right prompt shows what Enter will do: `→ agent` for a prompt,
+`? ask` when a dialog will ask, nothing for a command. The classifier runs in the background on every
+change of the line, so typing never waits for it; Enter still classifies the line itself.
+
 The plugin replaces the `accept-line` widget (calling the previous one, if another plugin wrapped
-it) and binds Alt+Enter (`^[^M`) in the `emacs` and `viins` keymaps. Settings, read on every Enter:
+it), binds Alt+Enter (`^[^M`) in the `emacs` and `viins` keymaps, adds `zle-line-init`,
+`zle-line-pre-redraw` and `zle-line-finish` hooks (with `add-zle-hook-widget`) and defines a
+function `ecdy` in front of the binary, so that `ecdy doctor` can check the shell. Settings:
 
 | Variable | Default | |
 |---|---|---|
 | `ECDY_BIN` | `ecdy` | the ecdy executable |
 | `ECDY_CLASSIFY_TIMEOUT` | `0.5` | seconds to wait for the classifier |
+| `ECDY_INDICATOR` | `rprompt` | `rprompt`: shown in front of `RPROMPT`; `var`: only set `$ECDY_VERDICT` (`cmd`, `prompt`, `ask` or empty) and redraw, for a theme that shows it itself; `off`: no indicator, no background classifier |
+| `ECDY_INDICATOR_PROMPT` | `%F{magenta}→ agent%f` | indicator for a prompt (prompt escapes allowed) |
+| `ECDY_INDICATOR_ASK` | `%F{yellow}? ask%f` | indicator when the dialog will ask |
+| `ECDY_INDICATOR_CMD` | empty | indicator for a command |
 
 If `ecdy` is missing, crashes, prints something unexpected or misses the deadline, Enter behaves
-exactly like in vanilla zsh.
+exactly like in vanilla zsh, and no indicator is shown.
+
+**`ecdy doctor`** checks that everything is in place: the `ecdy` the plugin runs, the config, each
+agent's command on `$PATH`, zsh, and, typed at the prompt, the shell itself: that Enter, Alt+Enter
+and `?` still reach ecdy after the other plugins loaded. `ecdy doctor --agents` also starts every
+agent (no prompt is sent) to see that it runs and that you are logged in; that may take a while the
+first time, as npx downloads the agents.
+
+**Other plugins.** Tested next to each of them, loaded before or after ecdy:
+
+- zsh-syntax-highlighting, zsh-autosuggestions, zsh-vi-mode, fzf-tab: work as they are. Do not set
+  fzf-tab's `accept-line` zstyle: that key accepts the line without ecdy's classifier.
+- [atuin](https://atuin.sh): load it with `eval "$(atuin init zsh --disable-ai)"`, as atuin binds
+  `?` to its AI mode otherwise, which takes ecdy's `?` prefix. atuin records a prompt as the
+  `ecdy ask -- '…'` it ran; to keep those out, add to `~/.config/atuin/config.toml`:
+  `history_filter = ["^ecdy ask -- "]`.
+
+`ecdy doctor` reports each of these when it finds it.
 
 ## Agents
 
-A prompt runs `ecdy ask -- '<prompt>'`, which sends it to the agent and streams the reply. Tool calls appear as one status line each
+A prompt runs `ecdy ask -- '<prompt>'`, which sends it to the agent and streams the reply. On a
+terminal the reply's markdown is rendered as it arrives (headings, emphasis, code, lists, quotes,
+links; tables and HTML as they are), and escape sequences in it are removed; piped, the reply is the
+agent's text as is. Tool calls appear as one status line each
 (`⚙ Read main.go ✓`, `$ go test ./... ✗`); `ecdy ask -v` also shows thoughts, plans, tool output (the
-last 20 lines of a command's output, with escape sequences and control characters removed) and the
-agent's stderr.
+last 20 lines of a command's output, with escape sequences and control characters removed; on a
+terminal the last 5 lines while the command runs) and the agent's stderr.
 
 The agent reads files, edits them and runs commands with its own tools and asks for permission its own
 way; ecdy shows those requests but does not offer the agent its file system or terminal (ACP's `fs/*`
@@ -156,7 +186,8 @@ Set `ECDY_LOG=debug` (or `info`, `warn`, `error`) to log protocol diagnostics to
 ```sh
 nix develop               # go, gopls, golangci-lint, zsh, tmux, nodejs
 go test -race ./...       # PTY tests need zsh; the devShell also provides the
-                          # zsh plugins the coexistence tests load
+                          # zsh plugins, atuin and fzf the compatibility tests
+                          # load, and tmux for the tests that read the screen
 nix develop .#zsh-matrix -c go test ./shell/   # PTY tests on zsh 5.8.1, 5.9 and the latest
 golangci-lint run
 go run ./cmd/ecdy version

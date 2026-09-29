@@ -40,8 +40,14 @@ that agents send in `_meta` is shown with `-v`; `pi` preset (pi-acp adapter).
 nothing is read, written or run, and the turn goes on (test); `_meta` command output shown with `-v`, cleaned of escape
 sequences (tests, both `ecdy ask` modes).
 
-**M7 — UX.** Live classification indicator while typing (`zle-line-pre-redraw` + RPROMPT, only cheap checks on the zsh side),
+**M7 — UX.** ✅ Live classification indicator while typing (`zle-line-pre-redraw` + RPROMPT, only cheap checks on the zsh side),
 markdown rendering, `ecdy doctor` (checks PATH, agents, login, zsh version, plugin conflicts).
+Decided in [ADR 0006](adr/0006-ux.md): the indicator runs the real classifier in the background (typing never waits);
+ecdy's own streaming markdown renderer; also live `-v` command output, the typed line in the scrollback, and
+compatibility with zsh-vi-mode, fzf-tab and atuin.
+*DoD:* screen tests (tmux) of the indicator and the scrollback on every zsh, incl. fail-open; markdown tests independent
+of chunking, fuzzed; `ecdy doctor` tests (offline, the shell through the plugin, agent login with fake agents);
+compatibility PTY tests.
 
 **M8 — Other shells.** bash (via ble.sh or `bind -x`), then fish. The classifier is shared; each shell gets its own integration.
 

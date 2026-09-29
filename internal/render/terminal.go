@@ -35,15 +35,40 @@ func (t *termBuf) add(data string) {
 	}
 }
 
-// addMeta appends the command output that meta carries, if any.
-func (t *termBuf) addMeta(meta map[string]any) {
+// addMeta appends the command output that meta carries, if any, and
+// reports whether there was some.
+func (t *termBuf) addMeta(meta map[string]any) bool {
+	added := false
 	for _, k := range termOutputKeys {
 		if v, ok := meta[k].(map[string]any); ok {
-			if data, ok := v["data"].(string); ok {
+			if data, ok := v["data"].(string); ok && data != "" {
 				t.add(data)
+				added = true
 			}
 		}
 	}
+	return added
+}
+
+// liveTailBytes is how much of the end of the output tail cleans: enough for
+// a few lines, so that a redraw does not clean the whole buffer.
+const liveTailBytes = 4 << 10
+
+// tail returns the last n lines of the output, cleaned, the last one
+// possibly unfinished (a progress bar).
+func (t *termBuf) tail(n int) []string {
+	b, cut := t.b, t.cut
+	if len(b) > liveTailBytes {
+		b, cut = b[len(b)-liveTailBytes:], true
+	}
+	if len(b) == 0 {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSuffix(clean(string(b)), "\n"), "\n")
+	if cut && len(lines) > 1 {
+		lines = lines[1:]
+	}
+	return lines[max(0, len(lines)-n):]
 }
 
 // lines returns the last n lines of the output, cleaned, preceded by a
@@ -68,6 +93,53 @@ func (t *termBuf) lines(n int) []string {
 		lines = append([]string{fmt.Sprintf("… %d earlier lines", earlier)}, lines...)
 	}
 	return lines
+}
+
+// fit cuts s to w columns, marking the cut with "…". Tabs are expanded to
+// spaces (tab stops every 8 columns) and East Asian wide characters count
+// as two columns, so that the result takes at most w columns of one row.
+func fit(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	col, cutEnd, cutCol := 0, 0, 0 // the last character that fits before a "…"
+	for _, r := range s {
+		n := 1
+		if r == '\t' {
+			n = 8 - col%8
+			b.WriteString(strings.Repeat(" ", n))
+		} else {
+			if wide(r) {
+				n = 2
+			}
+			b.WriteRune(r)
+		}
+		col += n
+		if col <= w-1 {
+			cutEnd, cutCol = b.Len(), col
+		}
+	}
+	if col <= w {
+		return b.String()
+	}
+	// A wide character or a tab that does not fit leaves a gap before "…".
+	return b.String()[:cutEnd] + strings.Repeat(" ", w-1-cutCol) + "…"
+}
+
+// wide reports whether r takes two columns: the East Asian Wide and
+// Fullwidth ranges (Unicode UAX #11) that matter in practice.
+func wide(r rune) bool {
+	return r >= 0x1100 && (r <= 0x115f || // Hangul Jamo
+		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f || // CJK … Yi
+		r >= 0xac00 && r <= 0xd7a3 || // Hangul syllables
+		r >= 0xf900 && r <= 0xfaff || // CJK compatibility ideographs
+		r >= 0xfe30 && r <= 0xfe4f || // CJK compatibility forms
+		r >= 0xff00 && r <= 0xff60 || // fullwidth forms
+		r >= 0xffe0 && r <= 0xffe6 ||
+		r >= 0x1f300 && r <= 0x1f64f || // pictographs, emoticons
+		r >= 0x1f900 && r <= 0x1f9ff ||
+		r >= 0x20000 && r <= 0x3fffd)
 }
 
 // clean makes a program's terminal output safe to print as plain lines:
@@ -111,22 +183,24 @@ func clean(s string) string {
 }
 
 // skipEscape returns the index after the escape sequence starting at s[i]
-// (an ESC); an unfinished sequence runs to the end of s.
+// (an ESC); an unfinished sequence runs to the end of s. A newline ends any
+// sequence and is kept: a terminal executes control characters met inside a
+// sequence, and the output must keep its lines.
 func skipEscape(s string, i int) int {
 	i++
-	if i >= len(s) {
+	if i >= len(s) || s[i] == '\n' {
 		return i
 	}
 	switch s[i] {
 	case '[': // CSI: parameters and intermediates, then a final byte 0x40–0x7e.
-		for i++; i < len(s); i++ {
+		for i++; i < len(s) && s[i] != '\n'; i++ {
 			if s[i] >= 0x40 && s[i] <= 0x7e {
 				return i + 1
 			}
 		}
 		return i
 	case ']', 'P', 'X', '^', '_': // OSC, DCS, SOS, PM, APC: up to BEL or ST (ESC \).
-		for i++; i < len(s); i++ {
+		for i++; i < len(s) && s[i] != '\n'; i++ {
 			if s[i] == 0x07 {
 				return i + 1
 			}
@@ -140,7 +214,7 @@ func skipEscape(s string, i int) int {
 		for i < len(s) && s[i] >= 0x20 && s[i] <= 0x2f {
 			i++
 		}
-		if i < len(s) {
+		if i < len(s) && s[i] != '\n' {
 			i++
 		}
 		return i

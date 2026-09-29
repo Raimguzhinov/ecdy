@@ -515,6 +515,21 @@ func TestAgentExitsAtStart(t *testing.T) {
 	}
 }
 
+// An agent that exits before initialize is written: the write fails with
+// EPIPE, maybe before its closed stdout is noticed, and that must still be
+// reported as its exit, not as a request error. A race: on one CPU the
+// agent usually exits first (`taskset -c 0 go test -count=50 -run
+// TestAgentExitsBeforeInitialize`).
+func TestAgentExitsBeforeInitialize(t *testing.T) {
+	e := newEnv(t, fakeagent.Script{})
+	e.opts.Command = []string{"false"}
+	_, err := acpclient.Start(t.Context(), e.opts, &recorder{})
+	var ee *acpclient.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("Start = %v, want ExitError", err)
+	}
+}
+
 func TestCommandNotFound(t *testing.T) {
 	e := newEnv(t, fakeagent.Script{})
 	e.opts.Command = []string{filepath.Join(e.dir, "no-such-agent")}
