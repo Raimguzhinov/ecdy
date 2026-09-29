@@ -25,6 +25,14 @@ func runDoctorCmd(t *testing.T, config string, args ...string) (string, int) {
 	if err := os.WriteFile(cfg, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// zsh is checked too; the nix build sandbox has none.
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "zsh"), []byte("#!/bin/sh\necho 5.9\n"), 0o755); err != nil { //nolint:gosec // a test executable
+		t.Fatal(err)
+	}
 	self, _ := os.Executable()
 	cmd := exec.Command(self, append([]string{"doctor"}, args...)...)
 	cmd.Dir = dir
@@ -32,7 +40,7 @@ func runDoctorCmd(t *testing.T, config string, args ...string) (string, int) {
 		"ECDY_TEST_MAIN=1",
 		"HOME=" + dir,
 		"XDG_CONFIG_HOME=" + filepath.Join(dir, "config"),
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -66,7 +74,7 @@ func fakeAgents(t *testing.T, scripts map[string]fakeagent.Script) string {
 func TestDoctorOffline(t *testing.T) {
 	toml := "default_agent = \"a\"\n[agents.a]\ncommand = [\"sh\"]\n[agents.b]\ncommand = [\"no-such-agent-cmd\"]\n"
 	out, code := runDoctorCmd(t, toml)
-	for _, want := range []string{"✓ config: ", "✓ agent a: sh (default)", "! agent b: `no-such-agent-cmd` not found on $PATH", "! plugin: not run from a zsh with the ecdy plugin"} {
+	for _, want := range []string{"✓ config: ", "✓ agent a: sh (default)", "✓ zsh: 5.9", "! agent b: `no-such-agent-cmd` not found on $PATH", "! plugin: not run from a zsh with the ecdy plugin"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q in:\n%s", want, out)
 		}
