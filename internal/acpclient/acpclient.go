@@ -226,11 +226,15 @@ func (c *Conn) spawn() error {
 }
 
 func (c *Conn) setup(ctx context.Context) error {
-	// https://agentclientprotocol.com/protocol/initialization. No client
-	// capabilities: fs/* and terminal/* are decided in M6.
+	// https://agentclientprotocol.com/protocol/initialization. No fs/* and
+	// no terminal/*: the agent uses its own tools (ADR 0005).
 	init, err := c.conn.Initialize(ctx, acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		ClientInfo:      &acp.Implementation{Name: "ecdy", Version: c.opts.ClientVersion},
+		ClientCapabilities: acp.ClientCapabilities{
+			Fs:       acp.FileSystemCapabilities{ReadTextFile: false, WriteTextFile: false},
+			Terminal: false,
+		},
 	})
 	if err != nil {
 		return c.connErr("initialize", err)
@@ -466,8 +470,9 @@ func (cl *client) RequestPermission(ctx context.Context, req acp.RequestPermissi
 	return acp.RequestPermissionResponse{Outcome: outcome}, nil
 }
 
-// File system and terminal methods: no capabilities are declared, so a
-// well-behaved agent never calls them (M6 decides whether to implement them).
+// File system and terminal methods are not implemented and not declared (ADR
+// 0005). Some agents call them anyway (opencode's fs/write_text_file): they get
+// method not found and go on.
 
 func (cl *client) ReadTextFile(context.Context, acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
 	return acp.ReadTextFileResponse{}, acp.NewMethodNotFound(acp.ClientMethodFsReadTextFile)

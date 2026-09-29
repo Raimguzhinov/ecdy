@@ -41,6 +41,7 @@ type tool struct {
 	kind   acp.ToolKind
 	status acp.ToolCallStatus
 	output []acp.ToolCallContent
+	term   termBuf // command output from _meta, verbose only
 }
 
 // New returns a Renderer writing to w.
@@ -140,6 +141,9 @@ func (r *Renderer) toolUpdate(u *acp.SessionToolCallUpdate) {
 	if u.Content != nil {
 		t.output = u.Content
 	}
+	if r.o.Verbose {
+		t.term.addMeta(u.Meta)
+	}
 	if t.title == prev.title && t.status == prev.status && prev.title != "" {
 		return
 	}
@@ -180,7 +184,7 @@ func (r *Renderer) toolLine(id acp.ToolCallId, t *tool) {
 		r.write(s + "\n")
 		r.last = ""
 		if r.o.Verbose && done(t.status) {
-			r.output(t.output)
+			r.output(t)
 		}
 		return
 	}
@@ -188,23 +192,24 @@ func (r *Renderer) toolLine(id acp.ToolCallId, t *tool) {
 	r.last = id
 }
 
-// output prints the text of a finished tool call, indented (verbose only).
-func (r *Renderer) output(content []acp.ToolCallContent) {
+// output prints the text of a finished tool call, indented (verbose only):
+// the first lines of its content, then the last lines of the command output
+// sent in _meta. A terminal content block only refers to that output.
+func (r *Renderer) output(t *tool) {
 	const maxLines = 20
 	var lines []string
-	for _, c := range content {
+	for _, c := range t.output {
 		switch {
 		case c.Content != nil && c.Content.Content.Text != nil:
-			lines = append(lines, strings.Split(strings.TrimRight(c.Content.Content.Text.Text, "\n"), "\n")...)
+			lines = append(lines, strings.Split(strings.TrimRight(clean(c.Content.Content.Text.Text), "\n"), "\n")...)
 		case c.Diff != nil:
-			lines = append(lines, "edit "+c.Diff.Path)
-		case c.Terminal != nil:
-			lines = append(lines, "terminal "+c.Terminal.TerminalId)
+			lines = append(lines, "edit "+clean(c.Diff.Path))
 		}
 	}
 	if len(lines) > maxLines {
 		lines = append(lines[:maxLines], fmt.Sprintf("… %d more lines", len(lines)-maxLines))
 	}
+	lines = append(lines, t.term.lines(maxLines)...)
 	for _, l := range lines {
 		r.write(r.style(dim, "  │ "+l) + "\n")
 	}

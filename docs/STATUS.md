@@ -1,6 +1,59 @@
 # Status
 
-## Current milestone: M5 — session context
+## Current milestone: M6 — client capabilities
+
+### Done
+
+- ADR 0005: ecdy does not implement `fs/*` or `terminal/*`; the agent keeps its own tools. Read
+  from the code of every preset (2026-09-29): claude-agent-acp 0.84.0 and codex-acp 1.13.1 never
+  call them, gemini-cli uses `fs/*` only when declared and works the same without it, opencode
+  sends `fs/write_text_file` after an edit without checking the capability (fire-and-forget, to
+  mirror the edit into an editor), pi-acp calls neither. None uses `terminal/*`.
+- `acpclient`: `initialize` sets `fs` and `terminal` to false explicitly; the methods still
+  answer `method not found`.
+- `pi` preset: `npx -y pi-acp`, the ACP Registry's adapter for pi (pi.dev), which runs
+  `pi --mode rpc` (pi 0.81+ on `$PATH`). README: pi runs its tools without permission requests
+  (only pi extensions' questions become dialogs); `quietStartup` hides the adapter's start-up
+  summary. `TestPresets` pins every built-in launch command.
+- `render`: with `-v`, command output that codex-acp and pi-acp send in
+  `tool_call_update._meta.terminal_output_delta` / `terminal_output` is appended per tool call
+  (a 64 KiB tail) and its last 20 lines are printed under the finished tool call
+  (`… N earlier lines` above them) instead of the `terminal <id>` placeholder. `clean` removes
+  escape sequences (CSI, OSC/DCS/SOS/PM/APC up to BEL or ST, two-byte ones, unfinished ones),
+  C0/DEL/C1 controls, keeps what follows the last `\r` of a line, replaces invalid UTF-8; tool
+  output text (claude's command output) is cleaned the same way.
+- Fake agent: `Call` (calls `fs/read_text_file`, `fs/write_text_file` or `terminal/create`
+  unasked and reports the error code), `TerminalOutput` (`_meta` output), `Tool.Terminal`
+  (terminal content block).
+- Tests: no capabilities in `initialize`; undeclared calls get `-32601`, nothing written or run,
+  the turn ends normally; render table (delta and full keys, placeholder gone, no output without
+  `-v`, malformed `_meta`, escapes incl. one split across pieces, `\r`, invalid UTF-8, text
+  content), last lines shown, bounded tail with the line count right after 100 000 lines, a cut
+  inside a character; `FuzzClean` (valid UTF-8, no controls, idempotent; 30 s, 1.17 M inputs);
+  `ecdy ask -v` end to end in both modes (the daemon passes `_meta` through).
+- Mutation check: 10 breakages, each alone with `-timeout=60s`, all caught: capability declared,
+  write carried out, only one `_meta` key read, no cleaning, head instead of tail, unbounded
+  buffer, partial first line kept, OSC ended only by BEL, no `\r` handling, `_meta` ignored.
+
+### Verified locally (2026-09-29)
+
+- `nix develop .#zsh-matrix -c go test -race ./...` — green (1:50); `golangci-lint run` — 0
+  issues; `nix build` (`ecdy ffdd355`), `nix flake check` — ok. No `ecdy daemon` or agent left.
+  `shell/` and timing-sensitive code were not touched: no `-count=20` or one-CPU runs.
+- Manual check with pi 0.87.1 through `pi-acp` 0.0.34 (`npx`): a reply (exit 0); a `touch` in pi's
+  bash tool ran with no permission request; `ecdy ask -v` showed a `printf` with colours as
+  `│ red` / `│ second line`, no escape sequences left (`cat -v`).
+- Not verified live: codex (no network route from this machine, see M3), gemini, opencode.
+
+### Known limitations
+
+- Command output is shown after the command finishes, not while it runs (M7).
+- The agent's own text is printed as is; only tool output is cleaned (markdown rendering, M7).
+- pi has no permission requests: with the `pi` preset, the agent's commands and edits run
+  without a dialog.
+- `FuzzClean` is not in CI (as `FuzzRedact`); its seed corpus runs as a unit test.
+
+## Done: M5 — session context
 
 ### Done
 
@@ -312,7 +365,7 @@
 - `ECDY_SESSION` is not exported yet (M4).
 - `TestFirstKind` uses `/usr/bin:/bin` as `$PATH`, so it expects `ls` and `/bin/sh` there.
 
-## Next: M6 — client capabilities
+## Next: M7 — UX
 
-See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m6-capabilities`.
-First task: the ADR — implement `fs/*` and `terminal/*`, or leave the agent its own tools.
+See [ROADMAP.md](ROADMAP.md). Start a new session, read this file, branch `m7-ux`: live
+classification indicator, markdown rendering, `ecdy doctor`; also live command output (ADR 0005).

@@ -404,6 +404,30 @@ func testAskNoTerminal(t *testing.T, m mode) {
 	}
 }
 
+// Command output that the agent sends in _meta (codex-acp, pi-acp) is shown
+// with -v, cleaned of escape sequences; the daemon passes _meta through.
+func TestAskTerminalOutput(t *testing.T) { forEachMode(t, testAskTerminalOutput) }
+
+func testAskTerminalOutput(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{
+		{Tool: &fakeagent.Tool{ID: "t1", Title: "go test ./...", Kind: "execute"}},
+		{TerminalOutput: &fakeagent.TerminalOutput{ID: "t1", Key: "terminal_output_delta", Data: "\x1b[32mok\x1b[0m  \tpkg/a\n"}},
+		{TerminalOutput: &fakeagent.TerminalOutput{ID: "t1", Key: "terminal_output", Data: "FAIL\tpkg/b\n"}},
+		{ToolDone: &fakeagent.Tool{ID: "t1", Status: "failed", Terminal: true}},
+	}})
+	cmd := e.command("-v", "--", "test")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("ecdy ask: %v\n%s", err, stderr.String())
+	}
+	want := "$ go test ./...\n$ go test ./... ✗\n  │ ok  \tpkg/a\n  │ FAIL\tpkg/b\n"
+	if stdout.String() != want {
+		t.Errorf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
 func TestAskNoPrompt(t *testing.T) {
 	if _, err := runRoot(t, "ask"); err == nil {
 		t.Fatal("ask without a prompt: expected error")

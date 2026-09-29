@@ -88,6 +88,16 @@ type Step struct {
 	// if it is not answered within that many milliseconds; the agent then
 	// sends "permission: withdrawn\n" and goes on with the turn.
 	WithdrawMS int `json:"withdraw_ms,omitempty"`
+	// Call calls a client method the client did not declare (fs/*,
+	// terminal/*), as some agents do, with Path as its file (terminal/create
+	// runs "touch Path"), then sends a text chunk "call <method>: ok\n" or
+	// "call <method>: error <code>\n".
+	Call string `json:"call,omitempty"`
+	Path string `json:"path,omitempty"`
+	// TerminalOutput sends what a command printed the way codex-acp and
+	// pi-acp do: a tool_call_update whose _meta holds
+	// {Key: {"terminal_id": ID, "data": Data}}.
+	TerminalOutput *TerminalOutput `json:"terminal_output,omitempty"`
 	// WaitCancel blocks until session/cancel and ends the turn with stop
 	// reason cancelled.
 	WaitCancel bool `json:"wait_cancel,omitempty"`
@@ -108,6 +118,16 @@ type Tool struct {
 	Kind   string `json:"kind,omitempty"`
 	Status string `json:"status,omitempty"`
 	Output string `json:"output,omitempty"` // text content of a finished tool call
+	// Terminal, with ToolDone, sets the content to a terminal block with the
+	// tool call's id, as agents that stream output in _meta do.
+	Terminal bool `json:"terminal,omitempty"`
+}
+
+// TerminalOutput is a piece of command output sent in _meta.
+type TerminalOutput struct {
+	ID   string `json:"id"`
+	Key  string `json:"key"` // "terminal_output" or "terminal_output_delta"
+	Data string `json:"data"`
 }
 
 // Enabled reports whether the current process was started as the fake agent.
@@ -325,7 +345,17 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 			if s.ToolDone.Output != "" {
 				opts = append(opts, acp.WithUpdateContent([]acp.ToolCallContent{acp.ToolContent(acp.TextBlock(s.ToolDone.Output))}))
 			}
+			if s.ToolDone.Terminal {
+				opts = append(opts, acp.WithUpdateContent([]acp.ToolCallContent{acp.ToolTerminalRef(s.ToolDone.ID)}))
+			}
 			err = a.update(ctx, p.SessionId, acp.UpdateToolCall(acp.ToolCallId(s.ToolDone.ID), opts...))
+		case s.Call != "":
+			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText(a.call(ctx, p.SessionId, s.Call, s.Path)))
+		case s.TerminalOutput != nil:
+			o := s.TerminalOutput
+			u := acp.UpdateToolCall(acp.ToolCallId(o.ID))
+			u.ToolCallUpdate.Meta = map[string]any{o.Key: map[string]any{"terminal_id": o.ID, "data": o.Data}}
+			err = a.update(ctx, p.SessionId, u)
 		case s.Permission != nil:
 			rctx := ctx
 			if a.script.NoCancelRequest {
@@ -394,6 +424,30 @@ func (a *agent) update(ctx context.Context, id acp.SessionId, u acp.SessionUpdat
 		return fmt.Errorf("session update: %w", err)
 	}
 	return nil
+}
+
+// call runs a Call step and returns the text chunk that reports it.
+func (a *agent) call(ctx context.Context, id acp.SessionId, method, path string) string {
+	var err error
+	switch method {
+	case acp.ClientMethodFsReadTextFile:
+		_, err = a.conn.ReadTextFile(ctx, acp.ReadTextFileRequest{SessionId: id, Path: path})
+	case acp.ClientMethodFsWriteTextFile:
+		_, err = a.conn.WriteTextFile(ctx, acp.WriteTextFileRequest{SessionId: id, Path: path, Content: "written by the agent\n"})
+	case acp.ClientMethodTerminalCreate:
+		_, err = a.conn.CreateTerminal(ctx, acp.CreateTerminalRequest{SessionId: id, Command: "touch", Args: []string{path}})
+	default:
+		err = fmt.Errorf("fakeagent: no call step for %s", method)
+	}
+	var re *acp.RequestError
+	switch {
+	case err == nil:
+		return "call " + method + ": ok\n"
+	case errors.As(err, &re):
+		return fmt.Sprintf("call %s: error %d\n", method, re.Code)
+	default:
+		return fmt.Sprintf("call %s: %v\n", method, err)
+	}
 }
 
 func (a *agent) Authenticate(context.Context, acp.AuthenticateRequest) (acp.AuthenticateResponse, error) {

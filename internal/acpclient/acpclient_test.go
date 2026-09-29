@@ -2,6 +2,7 @@ package acpclient_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -142,6 +143,60 @@ func TestTextStreaming(t *testing.T) {
 	}
 	if !strings.Contains(string(reqs[2].Params), `"text":"say hello"`) {
 		t.Errorf("prompt params %s lack the prompt", reqs[2].Params)
+	}
+}
+
+// TestNoClientCapabilities: ecdy declares no fs/* and no terminal/* (ADR
+// 0005).
+func TestNoClientCapabilities(t *testing.T) {
+	e := newEnv(t, fakeagent.Script{})
+	e.start(t, &recorder{})
+	reqs, err := fakeagent.ReadRecord(e.record)
+	if err != nil || len(reqs) == 0 || reqs[0].Method != acp.AgentMethodInitialize {
+		t.Fatalf("requests = %v, %v", e.methods(t), err)
+	}
+	var init acp.InitializeRequest
+	if err := json.Unmarshal(reqs[0].Params, &init); err != nil {
+		t.Fatal(err)
+	}
+	if caps := init.ClientCapabilities; caps.Fs.ReadTextFile || caps.Fs.WriteTextFile || caps.Terminal {
+		t.Errorf("client capabilities = %s", reqs[0].Params)
+	}
+}
+
+// TestUndeclaredCalls: an agent that calls fs/* or terminal/* anyway (opencode
+// does) gets method not found, nothing is read, written or run, and the turn
+// goes on.
+func TestUndeclaredCalls(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "secret")
+	if err := os.WriteFile(secret, []byte("hunter2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	written, touched := filepath.Join(dir, "written"), filepath.Join(dir, "touched")
+	e := newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{
+		{Call: acp.ClientMethodFsReadTextFile, Path: secret},
+		{Call: acp.ClientMethodFsWriteTextFile, Path: written},
+		{Call: acp.ClientMethodTerminalCreate, Path: touched},
+		{Text: "still here\n"},
+	}})
+	h := &recorder{}
+	c := e.start(t, h)
+	stop, err := c.Prompt(t.Context(), "try")
+	if err != nil || stop != acp.StopReasonEndTurn {
+		t.Fatalf("Prompt = %q, %v", stop, err)
+	}
+	want := "call fs/read_text_file: error -32601\n" +
+		"call fs/write_text_file: error -32601\n" +
+		"call terminal/create: error -32601\n" +
+		"still here\n"
+	if got := h.Text(); got != want {
+		t.Errorf("text = %q, want %q", got, want)
+	}
+	for _, p := range []string{written, touched} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s exists (%v): the call was carried out", p, err)
+		}
 	}
 }
 

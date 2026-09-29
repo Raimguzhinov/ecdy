@@ -75,6 +75,27 @@ func TestLoadErrors(t *testing.T) {
 	}
 }
 
+// TestPresets pins the built-in launch commands to the ACP Registry's
+// agent.json of each agent (see Default).
+func TestPresets(t *testing.T) {
+	want := map[string][]string{
+		"claude":   {"npx", "-y", "@agentclientprotocol/claude-agent-acp"},
+		"codex":    {"npx", "-y", "@agentclientprotocol/codex-acp"},
+		"gemini":   {"gemini", "--acp"},
+		"opencode": {"opencode", "acp"},
+		"pi":       {"npx", "-y", "pi-acp"},
+	}
+	agents := Default().Agents
+	if len(agents) != len(want) {
+		t.Errorf("%d presets, want %d", len(agents), len(want))
+	}
+	for name, cmd := range want {
+		if got := agents[name].Command; !slices.Equal(got, cmd) {
+			t.Errorf("%s = %q, want %q", name, got, cmd)
+		}
+	}
+}
+
 func TestUnknownAgent(t *testing.T) {
 	_, _, err := Default().Agent("nope")
 	if err == nil || !strings.Contains(err.Error(), "claude, codex") {

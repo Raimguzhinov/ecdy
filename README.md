@@ -56,8 +56,13 @@ exactly like in vanilla zsh.
 ## Agents
 
 A prompt runs `ecdy ask -- '<prompt>'`, which sends it to the agent and streams the reply. Tool calls appear as one status line each
-(`⚙ Read main.go ✓`, `$ go test ./... ✗`); `ecdy ask -v` also shows thoughts, plans, tool output and
-the agent's stderr.
+(`⚙ Read main.go ✓`, `$ go test ./... ✗`); `ecdy ask -v` also shows thoughts, plans, tool output (the
+last 20 lines of a command's output, with escape sequences and control characters removed) and the
+agent's stderr.
+
+The agent reads files, edits them and runs commands with its own tools and asks for permission its own
+way; ecdy shows those requests but does not offer the agent its file system or terminal (ACP's `fs/*`
+and `terminal/*`, see [ADR 0005](docs/adr/0005-client-capabilities.md)).
 
 Built-in agents (the launch commands of the [ACP Registry](https://github.com/agentclientprotocol/registry)):
 
@@ -67,6 +72,13 @@ Built-in agents (the launch commands of the [ACP Registry](https://github.com/ag
 | `codex` | `npx -y @agentclientprotocol/codex-acp` |
 | `gemini` | `gemini --acp` |
 | `opencode` | `opencode acp` |
+| `pi` | `npx -y pi-acp` |
+
+[pi](https://pi.dev) has no ACP mode of its own: `pi-acp`, the adapter listed in the registry, runs
+`pi --mode rpc`, so `pi` (0.81 or newer) must be installed and on `$PATH`. pi runs its tools without
+asking, so its commands and edits show up as tool calls but never as permission dialogs, unless a
+pi extension asks (the adapter turns an extension's question into one). The adapter prints pi's start-up summary
+before the first reply; `"quietStartup": true` in `~/.pi/agent/settings.json` turns it off.
 
 Switch the agent of the current shell with `ecdy use codex` (`ecdy use` prints it), pick one for a
 single prompt with `ecdy ask --agent codex -- ...`, or add and override agents in

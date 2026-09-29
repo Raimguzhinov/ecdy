@@ -51,7 +51,9 @@ const maxContextCommands = 1000
 
 // Default returns the built-in presets. Launch commands are taken from the
 // ACP Registry (https://github.com/agentclientprotocol/registry, the
-// agent.json of each agent), checked on 2026-09-27.
+// agent.json of each agent), checked on 2026-09-27; pi on 2026-09-29. pi
+// has no ACP mode of its own: the registry's pi-acp adapter runs `pi --mode
+// rpc`, so pi itself must be on $PATH.
 func Default() Config {
 	return Config{
 		DefaultAgent: "claude",
@@ -60,6 +62,7 @@ func Default() Config {
 			"codex":    {Command: []string{"npx", "-y", "@agentclientprotocol/codex-acp"}},
 			"gemini":   {Command: []string{"gemini", "--acp"}},
 			"opencode": {Command: []string{"opencode", "acp"}},
+			"pi":       {Command: []string{"npx", "-y", "pi-acp"}},
 		},
 		IdleTimeout:     30 * time.Minute,
 		ContextCommands: 20,

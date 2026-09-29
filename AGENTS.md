@@ -202,7 +202,10 @@ command = ["gemini", "--acp"]
 [agents.opencode]
 command = ["opencode", "acp"]
 
-# pi and others — check launch commands against the ACP Registry before adding a preset
+[agents.pi]
+command = ["npx", "-y", "pi-acp"]   # adapter: runs `pi --mode rpc`, pi must be on $PATH
+
+# others — check launch commands against the ACP Registry before adding a preset
 ```
 
 These presets are built in (`internal/config`); the file only adds agents or overrides them.
