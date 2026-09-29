@@ -79,6 +79,13 @@
         }
       );
 
+      overlays.default = final: _prev: {
+        ecdy = self.packages.${final.stdenv.hostPlatform.system}.default;
+      };
+
+      nixosModules.default = import ./nix/nixos-module.nix self;
+      homeManagerModules.default = import ./nix/home-manager-module.nix self;
+
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
     };
 }
