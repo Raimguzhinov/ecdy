@@ -86,8 +86,9 @@ func TestDoctorOffline(t *testing.T) {
 	}
 }
 
-// With --agents every agent is started: initialize and session/new, no
-// prompt; a login it needs, a crash and a silent agent are failures.
+// Each agent named is started: initialize and session/new, no prompt; a
+// login it needs, a crash and a silent agent are failures. (Named: --agents
+// alone would also start the built-in presets, real agents.)
 func TestDoctorAgents(t *testing.T) {
 	toml := fakeAgents(t, map[string]fakeagent.Script{
 		"ok":   {},
@@ -95,7 +96,7 @@ func TestDoctorAgents(t *testing.T) {
 	})
 	toml += "[agents.silent]\ncommand = [\"sleep\", \"30\"]\n[agents.crash]\ncommand = [\"false\"]\n"
 	start := time.Now()
-	out, code := runDoctorCmd(t, toml, "--agents", "--timeout", "1s")
+	out, code := runDoctorCmd(t, toml, "--agent", "ok,auth", "--agent", "silent", "--agent", "crash", "--timeout", "1s")
 	for _, want := range []string{
 		"✓ login ok: started, session created",
 		"✗ login auth: agent requires authentication (Log in with a browser; Log in in a terminal)",
@@ -106,13 +107,13 @@ func TestDoctorAgents(t *testing.T) {
 			t.Errorf("no %q in:\n%s", want, out)
 		}
 	}
-	if code != 1 {
-		t.Errorf("exit %d", code)
+	if code != 1 || strings.Contains(out, "login claude") {
+		t.Errorf("exit %d:\n%s", code, out)
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("took %s: the agents are not checked in parallel, or the timeout does not stop them", d)
 	}
-	// --agent: only that one.
+	// Only the agents named.
 	out, code = runDoctorCmd(t, toml, "--agent", "ok")
 	if code != 0 || !strings.Contains(out, "login ok") || strings.Contains(out, "login auth") {
 		t.Errorf("exit %d:\n%s", code, out)
