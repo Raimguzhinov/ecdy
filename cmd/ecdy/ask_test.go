@@ -276,6 +276,27 @@ func testAskPermissionTypeahead(t *testing.T, m mode) {
 	expectExit(t, term, 0)
 }
 
+// Each dialog of a turn takes the first key typed: the reader of an earlier
+// dialog does not outlive it and swallow the next dialog's key.
+func TestAskPermissionTwice(t *testing.T) { forEachMode(t, testAskPermissionTwice) }
+
+func testAskPermissionTwice(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{
+		{Permission: &fakeagent.Tool{ID: "t1", Title: "rm -rf build"}},
+		{Permission: &fakeagent.Tool{ID: "t2", Title: "rm -rf dist"}},
+	}})
+	term := e.start(t, "clean")
+	term.Expect("rm -rf build")
+	term.Expect("^C cancel")
+	term.Send("1")
+	term.Expect("permission: allow")
+	term.Expect("rm -rf dist")
+	term.Expect("^C cancel")
+	term.Send("3")
+	term.Expect("permission: reject")
+	expectExit(t, term, 0)
+}
+
 func TestAskCtrlCInPermission(t *testing.T) { forEachMode(t, testAskCtrlCInPermission) }
 
 func testAskCtrlCInPermission(t *testing.T, m mode) {
