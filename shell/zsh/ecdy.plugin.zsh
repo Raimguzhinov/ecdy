@@ -243,6 +243,8 @@ _ecdy_accept() {
 _ecdy_accept_line() {
   emulate -L zsh
   _ECDY_ORIG='' _ECDY_REWRITTEN=''
+  # An indicator answer must not redraw the prompt under the Ask dialog.
+  _ecdy_ind_cancel
   # Classify only a fresh top-level line: not continuation lines ($PREBUFFER,
   # CONTEXT=cont), vared or select prompts.
   if [[ $CONTEXT != start || -n $PREBUFFER || -z ${BUFFER//[[:space:]]/} ]] ||
@@ -269,12 +271,9 @@ _ecdy_accept_line() {
 _ecdy_line_finish() {
   # First take the indicator away, as that redraws the line: the accepted
   # line keeps the user's own right prompt.
-  _ecdy_ind_cancel
-  if [[ -n $_ecdy_ind_text || -n $ECDY_VERDICT ]]; then
-    ECDY_VERDICT='' _ecdy_ind_text=''
-    [[ $RPS1 == $_ecdy_rps1_set ]] && RPS1=$_ecdy_rps1_user
-    zle reset-prompt
-  fi
+  local verdict=$ECDY_VERDICT
+  _ecdy_ind_reset
+  [[ -z $verdict ]] || zle reset-prompt
   [[ -n $_ECDY_SHOW ]] || return 0
   local show=$_ECDY_SHOW
   _ECDY_SHOW=''
@@ -368,8 +367,21 @@ _ecdy_ind_show() {
   zle && zle reset-prompt
 }
 
-_ecdy_line_init() {
+# _ecdy_ind_reset — take the indicator away. Returns 1 if RPS1 changed.
+# A line dropped by Ctrl+C or send-break skips zle-line-finish, so this also
+# runs before the next prompt.
+_ecdy_ind_reset() {
+  _ecdy_ind_cancel
   _ecdy_ind_buf='' ECDY_VERDICT='' _ecdy_ind_text=''
+  if [[ -n $_ecdy_rps1_set && $RPS1 == $_ecdy_rps1_set && $RPS1 != $_ecdy_rps1_user ]]; then
+    RPS1=$_ecdy_rps1_user
+    return 1
+  fi
+  return 0
+}
+
+_ecdy_line_init() {
+  _ecdy_ind_reset || zle reset-prompt
   _ecdy_rps1_user=$RPS1 _ecdy_rps1_set=$RPS1
 }
 
@@ -477,6 +489,7 @@ _ecdy_precmd() {
   # that status, whatever the functions before it did (checked on 5.8.1-5.9.2).
   local st=$?
   _ecdy_record $st
+  _ecdy_ind_reset
   # ZLE shows no right prompt for a line that started without one, even
   # after reset-prompt (seen on 5.8.1-5.9.2): give it an invisible one.
   [[ -n $RPS1 || ${ECDY_INDICATOR:-rprompt} != rprompt ]] || RPS1='%{%}'

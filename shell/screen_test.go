@@ -173,8 +173,22 @@ func testIndicator(t *testing.T, zsh string) {
 		s.waitRow("% rm everything in tmp except configs ? ask R")
 		s.clearLine()
 		s.waitRow("% R")
-		// Accepted, the line keeps only the user's right prompt.
-		s.send("explain this error")
+		// A line dropped by Esc in the Ask dialog or by Ctrl+C does not
+		// pass zle-line-finish: the next prompt has no indicator either.
+		s.send("rm everything in tmp except configs")
+		s.wait("destructive command")
+		s.run("send-keys", "Escape")
+		s.waitRow("% R")
+		s.typeText("explain")
+		s.waitRow("% explain → agent R")
+		s.run("send-keys", "C-c")
+		s.waitRow("% R")
+		// Accepted, the line keeps only the user's right prompt. (The line
+		// dropped by Ctrl+C stays on the screen as it was: clear it.)
+		s.run("send-keys", "C-l")
+		s.typeText("explain this error")
+		s.waitRow("% explain this error → agent R")
+		s.run("send-keys", "Enter")
 		scr := s.wait(askReply + "explain this error")
 		if !strings.Contains(scr, "% explain this error\n") || strings.Contains(scr, "→ agent") {
 			t.Errorf("the indicator stayed on the accepted line:\n%s", scr)
