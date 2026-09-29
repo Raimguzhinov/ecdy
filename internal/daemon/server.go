@@ -265,7 +265,10 @@ func (s *Server) prompt(w *wire, m Msg) {
 		fail(err)
 		return
 	}
-	defer s.release(a)
+	// Once: the turn releases the agent before the client hears that it
+	// ended, and the agent may be another turn's by the time this returns.
+	release := sync.OnceFunc(func() { s.release(a) })
+	defer release()
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
@@ -274,11 +277,13 @@ func (s *Server) prompt(w *wire, m Msg) {
 	defer close(ended)
 	// The turn is over before the client hears so: a client that closes
 	// the connection right after the last message must not look like one
-	// that left in the middle of the turn.
+	// that left in the middle of the turn, and its next prompt must not
+	// find the agent busy.
 	end := func(msg Msg) {
 		a.mu.Lock()
 		t.ended = true
 		a.mu.Unlock()
+		release()
 		_ = w.send(msg)
 	}
 	endErr := func(err error) { end(Msg{T: tError, Text: describe(name, err)}) }
