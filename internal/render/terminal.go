@@ -111,22 +111,24 @@ func clean(s string) string {
 }
 
 // skipEscape returns the index after the escape sequence starting at s[i]
-// (an ESC); an unfinished sequence runs to the end of s.
+// (an ESC); an unfinished sequence runs to the end of s. A newline ends any
+// sequence and is kept: a terminal executes control characters met inside a
+// sequence, and the output must keep its lines.
 func skipEscape(s string, i int) int {
 	i++
-	if i >= len(s) {
+	if i >= len(s) || s[i] == '\n' {
 		return i
 	}
 	switch s[i] {
 	case '[': // CSI: parameters and intermediates, then a final byte 0x40–0x7e.
-		for i++; i < len(s); i++ {
+		for i++; i < len(s) && s[i] != '\n'; i++ {
 			if s[i] >= 0x40 && s[i] <= 0x7e {
 				return i + 1
 			}
 		}
 		return i
 	case ']', 'P', 'X', '^', '_': // OSC, DCS, SOS, PM, APC: up to BEL or ST (ESC \).
-		for i++; i < len(s); i++ {
+		for i++; i < len(s) && s[i] != '\n'; i++ {
 			if s[i] == 0x07 {
 				return i + 1
 			}
@@ -140,7 +142,7 @@ func skipEscape(s string, i int) int {
 		for i < len(s) && s[i] >= 0x20 && s[i] <= 0x2f {
 			i++
 		}
-		if i < len(s) {
+		if i < len(s) && s[i] != '\n' {
 			i++
 		}
 		return i

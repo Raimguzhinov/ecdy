@@ -89,6 +89,12 @@ func TestTerminalOutput(t *testing.T) {
 			want:    "$ go test ./...\n$ go test ./... ✓\n  │ ab\n",
 		},
 		{
+			name:    "a newline ends an unfinished escape sequence",
+			o:       Options{Verbose: true},
+			updates: []acp.SessionUpdate{goTest, termOut("t2", "terminal_output_delta", "a\x1b\nb\x1b[3\nc\x1b]0;t\nd\n"), finishedInTerminal("t2")},
+			want:    "$ go test ./...\n$ go test ./... ✓\n  │ a\n  │ b\n  │ c\n  │ d\n",
+		},
+		{
 			name:    "carriage return overwrites the line (progress bars)",
 			o:       Options{Verbose: true},
 			updates: []acp.SessionUpdate{goTest, termOut("t2", "terminal_output_delta", "10%\r50%\r100% done\nnext\n"), finishedInTerminal("t2")},
@@ -178,11 +184,14 @@ func TestTerminalOutputCutMidRune(t *testing.T) {
 // no control characters but tab and newline, and cleaning it again changes
 // nothing.
 func FuzzClean(f *testing.F) {
-	for _, s := range []string{"plain\n", "\x1b[31mred\x1b[0m", "\x1b]0;t\x07", "\x1b]8;;u\x1b\\l", "a\rb\r\n", "\xff\u009b", "\x1bP1$r\x1b\\", "\x1b"} {
+	for _, s := range []string{"plain\n", "\x1b[31mred\x1b[0m", "\x1b]0;t\x07", "\x1b]8;;u\x1b\\l", "a\rb\r\n", "\xff\u009b", "\x1bP1$r\x1b\\", "\x1b", "\x1b\n"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
 		got := clean(s)
+		if strings.Count(got, "\n") != strings.Count(s, "\n") {
+			t.Fatalf("clean(%q) = %q: line count changed", s, got)
+		}
 		if !utf8.ValidString(got) {
 			t.Fatalf("clean(%q) = %q: invalid UTF-8", s, got)
 		}
