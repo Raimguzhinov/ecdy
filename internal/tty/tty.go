@@ -45,11 +45,19 @@ func Open() (*Terminal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open terminal: %w", err)
 	}
-	flushInput(int(f.Fd()))
-	state, err := term.MakeRaw(int(f.Fd()))
+	var state *term.State
+	err = control(f, func(fd int) error {
+		flushInput(fd)
+		var err error
+		state, err = term.MakeRaw(fd)
+		if err != nil {
+			return fmt.Errorf("raw mode: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("raw mode: %w", err)
+		return nil, err
 	}
 	t := &Terminal{f: f, state: state, keys: make(chan keyRead), done: make(chan struct{})}
 	go t.read()
@@ -95,15 +103,32 @@ func (t *Terminal) Write(p []byte) (int, error) {
 }
 
 // Close restores the terminal mode and closes it. Closing the file also ends
-// a pending Read of the reader goroutine: Go polls terminals.
+// a pending Read of the reader goroutine: Go polls terminals, as long as the
+// file stays non-blocking (see control).
 func (t *Terminal) Close() error {
 	close(t.done)
-	err := term.Restore(int(t.f.Fd()), t.state)
+	err := control(t.f, func(fd int) error { return term.Restore(fd, t.state) })
 	_ = t.f.Close()
 	if err != nil {
 		return fmt.Errorf("restore terminal: %w", err)
 	}
 	return nil
+}
+
+// control runs fn with f's descriptor. f.Fd() would do, but it switches
+// the descriptor to blocking mode (https://pkg.go.dev/os#File.Fd): Close
+// then no longer ends a pending Read, and the reader goroutine of a closed
+// dialog swallows the first key of the next one.
+func control(f *os.File, fn func(fd int) error) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return fmt.Errorf("terminal descriptor: %w", err)
+	}
+	var fnErr error
+	if err := rc.Control(func(fd uintptr) { fnErr = fn(int(fd)) }); err != nil {
+		return fmt.Errorf("terminal descriptor: %w", err)
+	}
+	return fnErr
 }
 
 // Style of the dialog.
