@@ -154,7 +154,7 @@ func TestMarkdownText(t *testing.T) {
 		},
 		{
 			name:    "thoughts are not markdown",
-			updates: []acp.SessionUpdate{acp.UpdateAgentMessageText("**a"), acp.UpdateAgentThoughtText("**b**")},
+			updates: []acp.SessionUpdate{acp.UpdateAgentMessageText("**a**"), acp.UpdateAgentThoughtText("**b**")},
 			want:    "<0;1>a<0>\n**b**\n",
 		},
 	}
@@ -167,12 +167,12 @@ func TestMarkdownText(t *testing.T) {
 	}
 	var b strings.Builder
 	r := New(&b, o)
-	r.Update(acp.UpdateAgentMessageText("say *it"))
+	r.Update(acp.UpdateAgentMessageText("say *it* "))
 	resume := r.Pause()
 	b.WriteString("[dialog]\n")
 	resume()
 	r.Notice("done")
-	if got, want := sgr(b.String()), "say <0;3>it<0>\n[dialog]\ndone\n"; got != want {
+	if got, want := sgr(b.String()), "say <0;3>it<0> \n[dialog]\ndone\n"; got != want {
 		t.Errorf("pause: got %q, want %q", got, want)
 	}
 }

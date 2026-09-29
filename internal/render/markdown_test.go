@@ -45,13 +45,18 @@ var markdownCases = []struct {
 	{"snake_case stays", "use snake_case_name here\n", "use snake_case_name here\n"},
 	{"lone star", "a * b\n", "a * b\n"},
 	{"stars between digits", "2*3*4\n", "2<0;3>3<0>4\n"},
-	{"unclosed bold ends at the line end", "**open\nnext\n", "<0;1>open<0>\nnext\n"},
+	{"unclosed bold is literal", "**open\nnext\n", "**open\nnext\n"},
+	{"unclosed star in arithmetic", "echo $((6*7)) done\n", "echo $((6*7)) done\n"},
+	{"closer of another length does not close", "*a** b\n", "*a** b\n"},
+	{"a closer that cannot close", "*a *b\n", "*a *b\n"},
 	{"long run literal", "a **** b\n", "a **** b\n"},
 	{"code span", "run `go test` now\n", "run <0;36>go test<0> now\n"},
 	{"code span keeps markup", "`a *b* c`\n", "<0;36>a *b* c<0>\n"},
 	{"double backtick span", "``a ` b``\n", "<0;36>a ` b<0>\n"},
-	{"unclosed code span", "`abc\n", "<0;36>abc<0>\n"},
+	{"unclosed code span", "`abc\n", "`abc\n"},
+	{"code span needs the same run", "``abc`\n", "``abc`\n"},
 	{"escape", `\*not\* \_x\_ \\ \q` + "\n", `*not* _x_ \ \q` + "\n"},
+	{"an escaped delimiter does not close", "*a\\*\n", "*a*\n"},
 	{"trailing backslash", "a\\\n", "a\\\n"},
 	{"link", "see [docs](https://x.dev) now\n", "see <0;4>docs<0> <0;2>(https://x.dev)<0> now\n"},
 	{"link same as url", "[https://x.dev](https://x.dev)\n", "<0;4>https://x.dev<0>\n"},
@@ -81,7 +86,7 @@ var markdownCases = []struct {
 	{"fence closing with trailing spaces", "```\na\n```  \nb\n", "<0;2>```<0>\n<0;36>a<0>\n<0;2>```  <0>\nb\n"},
 	{"fence closing with text is content", "```\n``` x\n```\n", "<0;2>```<0>\n<0;36>``` x<0>\n<0;2>```<0>\n"},
 	{"fence empty line", "```\n\n```\n", "<0;2>```<0>\n\n<0;2>```<0>\n"},
-	{"backtick fence with backtick info is inline", "```a`b\n", "<0;36>a`b<0>\n"},
+	{"backtick fence with backtick info is inline", "```a`b```\n", "<0;36>a`b<0>\n"},
 	{"unclosed fence", "```\ncode", "<0;2>```<0>\n<0;36>code<0>"},
 	{"table is plain", "| a | *b* |\n", "| a | <0;3>b<0> |\n"},
 	{"cyrillic", "это **важно**, да\n", "это <0;1>важно<0>, да\n"},
@@ -133,7 +138,7 @@ func TestMarkdownChunks(t *testing.T) {
 func TestMarkdownFlush(t *testing.T) {
 	var m markdown
 	got := m.feed("**bo") + "|" + m.flush() + "|" + m.feed("ld** x\n")
-	if want := "<0;1>bo|<0>|ld** x\n"; sgr(got) != want {
+	if want := "|**bo|ld** x\n"; sgr(got) != want {
 		t.Errorf("got  %q\nwant %q", sgr(got), want)
 	}
 	m = markdown{}

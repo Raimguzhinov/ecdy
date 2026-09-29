@@ -362,11 +362,18 @@ func (m *markdown) step(eol bool) int {
 		m.emit(m.inline(), "\\")
 		return 1
 	case '`':
+		// A code span needs a closing run of as many backticks on the line;
+		// without one the backticks are printed as they are.
 		n := runLen(l, 0)
-		if n == len(l) && !eol {
+		closed, known := closer(l, n, eol, func(k int, _, _ rune) bool { return k == n })
+		switch {
+		case !known:
 			return 0
+		case closed:
+			m.code = n
+		default:
+			m.emit(m.inline(), string(l[:n]))
 		}
-		m.code = n
 		return n
 	case '*', '_':
 		return m.delim(l, eol)
@@ -399,12 +406,18 @@ func (m *markdown) delim(l []byte, eol bool) int {
 	if prev == 0 {
 		prev = ' ' // the start of the text
 	}
-	left := !unicode.IsSpace(next) && (!isPunct(next) || unicode.IsSpace(prev) || isPunct(prev))
-	right := !unicode.IsSpace(prev) && (!isPunct(prev) || unicode.IsSpace(next) || isPunct(next))
-	canOpen, canClose := left, right
-	if l[0] == '_' {
-		canOpen = left && (!right || isPunct(prev))
-		canClose = right && (!left || isPunct(next))
+	canOpen, canClose := flanking(l[0], prev, next)
+	if canOpen && (n == 1 && !m.italic || n == 2 && !m.bold || n == 3 && !m.bold && !m.italic) {
+		// An opener counts only if a run of the same length can close it
+		// later on the line; an unmatched one is literal (section 6.2).
+		// Until that is known, the rest of the line is held back.
+		closed, known := closer(l, n, eol, func(k int, prev, next rune) bool {
+			return k == n && m.canClose(l[0], prev, next)
+		})
+		if !known {
+			return 0
+		}
+		canOpen = closed
 	}
 	toggle := func(on *bool) bool {
 		switch {
@@ -437,6 +450,57 @@ func (m *markdown) delim(l []byte, eol bool) int {
 	}
 	m.prev = rune(l[0])
 	return n
+}
+
+// flanking tells whether a run of delimiter c between prev and next can
+// open and close emphasis (CommonMark, section 6.2).
+func flanking(c byte, prev, next rune) (canOpen, canClose bool) {
+	left := !unicode.IsSpace(next) && (!isPunct(next) || unicode.IsSpace(prev) || isPunct(prev))
+	right := !unicode.IsSpace(prev) && (!isPunct(prev) || unicode.IsSpace(next) || isPunct(next))
+	if c == '_' {
+		return left && (!right || isPunct(prev)), right && (!left || isPunct(next))
+	}
+	return left, right
+}
+
+func (m *markdown) canClose(c byte, prev, next rune) bool {
+	_, ok := flanking(c, prev, next)
+	return ok
+}
+
+// closer looks for a run of l[0]'s character after the run of n at the start
+// of l that match accepts, given the run's length and the characters around
+// it. known is false while the line so far does not tell.
+func closer(l []byte, n int, eol bool, match func(k int, prev, next rune) bool) (found, known bool) {
+	c := l[0]
+	prev := rune(c)
+	for i := n; i < len(l); {
+		if l[i] == '\\' && c != '`' && i+1 < len(l) {
+			prev = rune(l[i+1])
+			i += 2
+			continue
+		}
+		if l[i] == c {
+			k := runLen(l, i)
+			if i+k == len(l) && !eol {
+				return false, false
+			}
+			next := ' '
+			if i+k < len(l) {
+				next, _ = utf8.DecodeRune(l[i+k:])
+			}
+			if match(k, prev, next) {
+				return true, true
+			}
+			prev = rune(c)
+			i += k
+			continue
+		}
+		r, size := utf8.DecodeRune(l[i:])
+		prev = r
+		i += size
+	}
+	return false, eol
 }
 
 func isPunct(r rune) bool { return unicode.IsPunct(r) || unicode.IsSymbol(r) }
