@@ -743,6 +743,38 @@ func TestNewSession(t *testing.T) {
 	}
 }
 
+// pi-acp's startup banner (pi version, context files, skills, extensions)
+// is dropped: it comes as a message chunk right after session/new, and its
+// text in the response's _meta tells it from the answer. It can land in the
+// first turn; the same text later is the agent's own and is shown.
+func TestStartupInfo(t *testing.T) {
+	const banner = "pi v0.87.1\nSkills\n• SKILL.md\n"
+	e := newEnv(t, fakeagent.Script{
+		StartupInfo: banner,
+		Turn:        []fakeagent.Step{{StartupInfo: true}, {Echo: true}},
+	})
+	h := &recorder{}
+	c := e.start(t, h)
+	for _, p := range []string{"one", "two"} {
+		if stop, err := c.Prompt(t.Context(), p); err != nil || stop != acp.StopReasonEndTurn {
+			t.Fatalf("Prompt(%q) = %q, %v", p, stop, err)
+		}
+	}
+	if got, want := h.Text(), "one\n"+banner+"two\n"; got != want {
+		t.Errorf("text = %q, want %q", got, want)
+	}
+	// A new session sends a new banner.
+	if err := c.NewSession(t.Context(), e.dir); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := c.Prompt(t.Context(), "three"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if got, want := h.Text(), "one\n"+banner+"two\nthree\n"; got != want {
+		t.Errorf("after session/new: text = %q, want %q", got, want)
+	}
+}
+
 func TestDone(t *testing.T) {
 	code := 0
 	e := newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Exit: &code}}})

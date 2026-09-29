@@ -58,6 +58,10 @@ type Script struct {
 	// Record, if set, is a file the agent appends every request it receives
 	// to, one JSON object ({"method": ..., "params": ...}) per line.
 	Record string `json:"record,omitempty"`
+	// StartupInfo is returned from session/new in _meta.piAcp.startupInfo,
+	// as pi-acp does with the banner it then sends as a message chunk (see
+	// Step.StartupInfo).
+	StartupInfo string `json:"startup_info,omitempty"`
 	// Turn is played on every session/prompt.
 	Turn []Step `json:"turn"`
 }
@@ -74,6 +78,10 @@ type Step struct {
 	Stderr  string `json:"stderr,omitempty"`  // written to stderr
 	Raw     string `json:"raw,omitempty"`     // written to stdout as one line, bypassing the SDK
 	SleepMS int    `json:"sleep_ms,omitempty"`
+
+	// StartupInfo sends Script.StartupInfo as a chunk: pi-acp sends it
+	// right after session/new, so it can arrive in the first turn.
+	StartupInfo bool `json:"startup_info,omitempty"`
 
 	// Tool starts a tool call (status pending).
 	Tool *Tool `json:"tool,omitempty"`
@@ -299,7 +307,11 @@ func (a *agent) NewSession(_ context.Context, p acp.NewSessionRequest) (acp.NewS
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sessions++
-	return acp.NewSessionResponse{SessionId: acp.SessionId(fmt.Sprintf("fake-session-%d", a.sessions))}, nil
+	resp := acp.NewSessionResponse{SessionId: acp.SessionId(fmt.Sprintf("fake-session-%d", a.sessions))}
+	if a.script.StartupInfo != "" {
+		resp.Meta = map[string]any{"piAcp": map[string]any{"startupInfo": a.script.StartupInfo}}
+	}
+	return resp, nil
 }
 
 func (a *agent) Cancel(_ context.Context, p acp.CancelNotification) error {
@@ -346,6 +358,8 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText(text+"\n"))
 		case s.History:
 			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText("history: "+history+"\n"))
+		case s.StartupInfo:
+			err = a.update(ctx, p.SessionId, acp.UpdateAgentMessageText(a.script.StartupInfo))
 		case s.Thought != "":
 			err = a.update(ctx, p.SessionId, acp.UpdateAgentThoughtText(s.Thought))
 		case s.Raw != "":
