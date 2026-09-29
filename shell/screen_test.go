@@ -1,6 +1,7 @@
 package shell_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,6 +216,23 @@ func testIndicator(t *testing.T, zsh string) {
 		s.typeText("explain this error")
 		s.waitRow("% explain this error <prompt>")
 	})
+	t.Run("burst", func(t *testing.T) {
+		// A line that arrives at once (a paste) is classified once it is
+		// in, not after every character: ZLE runs zle-line-pre-redraw only
+		// when it redraws, not while keys are waiting.
+		dir := t.TempDir()
+		calls := filepath.Join(dir, "calls")
+		counting := "#!/bin/sh\n[ \"$1\" = classify ] && echo x >>" + calls + "\nexec " + ecdyBin + " \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(dir, "ecdy"), []byte(counting), 0o755); err != nil { //nolint:gosec // a test executable
+			t.Fatal(err)
+		}
+		s := startScreen(t, zsh, zshOpts{rc: "RPS1=R", after: "ECDY_BIN=" + filepath.Join(dir, "ecdy")}, 80)
+		s.typeText("explain why this build is so slow today")
+		s.waitRow("% explain why this build is so slow today → agent R")
+		if data, _ := os.ReadFile(calls); strings.Count(string(data), "x") > 3 {
+			t.Errorf("%d classifier runs for one pasted line", strings.Count(string(data), "x"))
+		}
+	})
 	t.Run("off", func(t *testing.T) {
 		// No classifier runs while typing: only Enter's.
 		dir := t.TempDir()
@@ -278,5 +296,30 @@ func testIndicatorFailOpen(t *testing.T, zsh string) {
 				waitGone(t, pid)
 			}
 		})
+	}
+}
+
+// TestIndicatorSignals: a redraw interrupted by a signal leaves the rest of
+// the line in zsh's output buffer until the next key. The classifier's exit
+// comes right after its answer, so the indicator's redraw waits for it.
+// Here the classifier sends SIGCHLD to zsh until it exits, and a large
+// (invisible) prompt makes each redraw long enough to be hit.
+func TestIndicatorSignals(t *testing.T) { forEachZsh(t, testIndicatorSignals) }
+
+func testIndicatorSignals(t *testing.T, zsh string) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("no /proc: the plugin can only nap")
+	}
+	dir := t.TempDir()
+	noisy := "#!/bin/sh\n[ \"$1\" = classify ] || exec " + ecdyBin + " \"$@\"\n" +
+		ecdyBin + " \"$@\"\nexec >&-\ni=0; while [ $i -lt 200 ]; do kill -CHLD $PPID; i=$((i+1)); done\n"
+	if err := os.WriteFile(filepath.Join(dir, "ecdy"), []byte(noisy), 0o755); err != nil { //nolint:gosec // a test executable
+		t.Fatal(err)
+	}
+	z := startZsh(t, zsh, zshOpts{after: `PS1="%{${(pl:40000::\e[0m:)}%}$PS1" ECDY_BIN=` + filepath.Join(dir, "ecdy")})
+	for i := range 10 {
+		z.Send(fmt.Sprintf("explain number %d", i))
+		z.Expect("→ agent")
+		z.Send(ctrlU)
 	}
 }

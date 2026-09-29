@@ -302,8 +302,35 @@ _ecdy_ind_cancel() {
   fi
   if [[ -n $_ecdy_ind_pid ]]; then
     kill $_ecdy_ind_pid 2>/dev/null
+    _ecdy_exited $_ecdy_ind_pid
     _ecdy_ind_pid=''
   fi
+}
+
+# _ecdy_exited PID — wait (about 0.1 s at most) until the child PID has exited, so
+# that its SIGCHLD reaches zsh now and not while ZLE redraws. zsh's signal
+# handlers do not restart system calls, and a signal arriving as ZLE writes
+# the line makes the write fail: what is left of the redraw stays in zsh's
+# output buffer until the next key (the blank line of _ecdy_stop). zsh
+# defers reaping inside a widget, so `kill -0` cannot tell: the child's
+# state (Z, a zombie) is read from /proc without forking. Without /proc,
+# a short nap is all it gets.
+_ecdy_exited() {
+  [[ $1 == <-> ]] || return 0
+  if [[ ! -r /proc/self/stat ]]; then
+    _ecdy_nap
+    return 0
+  fi
+  # A child that has closed its output exits within microseconds: check
+  # without sleeping first, then every 10 ms.
+  local st
+  integer i
+  for (( i = 0; i < 110; i++ )); do
+    # Gone: reaped already. (A failed redirection would print an error.)
+    [[ -r /proc/$1/stat ]] && { IFS= read -r st </proc/$1/stat } 2>/dev/null || return 0
+    [[ ${st##*) } == [ZX]* ]] && return 0
+    (( i < 100 )) || _ecdy_nap || return 0
+  done
 }
 
 _ecdy_pre_redraw() {
@@ -342,6 +369,8 @@ _ecdy_ind_ready() {
     done
     # An answer cut short: the classifier may hang after it.
     (( $#fields == 5 )) || kill $_ecdy_ind_pid 2>/dev/null
+    # The redraw below must not race the classifier's exit.
+    _ecdy_exited $_ecdy_ind_pid
     _ecdy_ind_pid=''
     _ecdy_ind_fd=''
   fi
