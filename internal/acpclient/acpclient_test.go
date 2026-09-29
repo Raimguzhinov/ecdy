@@ -483,10 +483,19 @@ func TestAgentCrashStderrHeld(t *testing.T) {
 			pidFile := filepath.Join(e.dir, "holder.pid")
 			e.opts.Command = []string{"sh", "-c", `setsid sh -c 'echo $$ > "$1"; exec sleep 60' sh "$1" & exec "$0"`, os.Args[0], pidFile}
 			c := e.start(t, &recorder{})
+			// The holder may not have written its pid yet: left running, it
+			// writes it while TempDir's cleanup removes the directory.
 			t.Cleanup(func() {
-				if b, err := os.ReadFile(pidFile); err == nil {
-					if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
-						_ = syscall.Kill(pid, syscall.SIGKILL)
+				for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+					if b, err := os.ReadFile(pidFile); err == nil {
+						if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+							_ = syscall.Kill(pid, syscall.SIGKILL)
+							return
+						}
+					}
+					if time.Now().After(deadline) {
+						t.Errorf("the holder did not write %s", pidFile)
+						return
 					}
 				}
 			})
