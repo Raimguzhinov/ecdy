@@ -175,6 +175,17 @@ func TestTurnsContinue(t *testing.T) {
 // TestContext: the context block goes before the prompt; each conversation
 // passes back the time it got from the previous turn, and a new one (ecdy
 // new) starts from zero; an empty block is not sent.
+// The agent is free by the time the client hears that the turn ended: a
+// prompt sent right after the last one's answer is not refused as busy.
+func TestBackToBack(t *testing.T) {
+	e := newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Echo: true}}}, time.Second)
+	for i := range 200 {
+		if _, err := e.turn(t, "x", &handler{}).Wait(); err != nil {
+			t.Fatalf("turn %d: %v", i, err)
+		}
+	}
+}
+
 func TestContext(t *testing.T) {
 	var (
 		mu     sync.Mutex

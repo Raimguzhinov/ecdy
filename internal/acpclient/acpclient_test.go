@@ -481,15 +481,26 @@ func TestAgentCrashStderrHeld(t *testing.T) {
 		t.Run(d.String(), func(t *testing.T) {
 			e := newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Exit: &code}}})
 			pidFile := filepath.Join(e.dir, "holder.pid")
-			e.opts.Command = []string{"sh", "-c", `setsid sh -c 'echo $$ > "$1"; exec sleep 60' sh "$1" & exec "$0"`, os.Args[0], pidFile}
+			// The holder writes its pid once it has left the agent's group,
+			// through a rename, so the file is never seen half written.
+			e.opts.Command = []string{"sh", "-c", `setsid sh -c 'echo $$ > "$1.tmp" && mv -f "$1.tmp" "$1"; exec sleep 60' sh "$1" & exec "$0"`, os.Args[0], pidFile}
 			c := e.start(t, &recorder{})
-			t.Cleanup(func() {
+			// Until then it is in the agent's group, which is killed when the
+			// agent exits: wait for it before the prompt makes the agent
+			// exit. The agent stays up meanwhile, so the wait always ends.
+			var pid int
+			for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 				if b, err := os.ReadFile(pidFile); err == nil {
-					if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
-						_ = syscall.Kill(pid, syscall.SIGKILL)
+					if pid, err = strconv.Atoi(strings.TrimSpace(string(b))); err != nil {
+						t.Fatalf("holder pid %q: %v", b, err)
 					}
+					break
 				}
-			})
+				if time.Now().After(deadline) {
+					t.Fatalf("the holder did not write %s", pidFile)
+				}
+			}
+			t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 			acpclient.SetDrainTimeout(c, d)
 			start := time.Now()
 			_, err := c.Prompt(t.Context(), "x")
@@ -498,7 +509,14 @@ func TestAgentCrashStderrHeld(t *testing.T) {
 			if !errors.As(err, &ee) {
 				t.Fatalf("Prompt = %v, want ExitError", err)
 			}
-			if el < d || el > d+time.Second {
+			// Otherwise nothing held stdout and stderr, and the timing
+			// below proves nothing.
+			if err := syscall.Kill(pid, 0); err != nil {
+				t.Fatalf("the holder is gone: %v", err)
+			}
+			// At least d (stdout is held until then), at most 2d (then
+			// stderr) plus scheduling slack, far below the holder's 60 s.
+			if el < d || el > 2*d+10*time.Second {
 				t.Errorf("Prompt took %v with drain timeout %v", el, d)
 			}
 		})

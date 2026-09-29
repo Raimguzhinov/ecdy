@@ -76,6 +76,19 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   mutant (redrawing a command's line over itself) and one of speed only (a zombie not recognized:
   every redraw waits the full 0.1 s).
 
+- **CI flakes** (every red run in the history has a found cause): `TestAgentCrashStderrHeld`'s
+  holder ran in the agent's process group until setsid and was killed with it when the prompt
+  made the agent exit (a vacuous pass, a 1.7 ms "drain", or a pid written into TempDir during its
+  removal); the test now waits for the holder before the prompt and checks that it is alive
+  after. The daemon freed the agent after telling the client the turn ended, so a prompt right
+  after an answer could be refused as busy (`TestBackToBack`). acp-go-sdk starts reading in its
+  constructor, before it stores its own fields and before `SetLogger`: the fake agent (and, in
+  theory, `acpclient`) raced with it, reported only in the fake agent's stderr; reading is gated
+  until the connection is set up (a full `-race` run with `GORACE=log_path`, children included: 0
+  reports). A terminal's close killed the shell only: what it left in the background (atuin's
+  `(atuin history end ... &)`) wrote into `$HOME` while it was removed and kept the PTY open; the
+  PTY's whole session is killed now (`TestCloseKillsSession`).
+
 ### Verified locally (2026-09-29)
 
 - `nix develop .#zsh-matrix -c go test -race ./...` — green (2:02); `golangci-lint run` — 0 issues;
