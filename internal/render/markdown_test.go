@@ -10,21 +10,7 @@ import (
 
 // sgr makes the styles in rendered markdown readable: ESC [ 0;1 m → <0;1>.
 func sgr(s string) string {
-	var b strings.Builder
-	for {
-		i := strings.Index(s, "\x1b[")
-		if i < 0 {
-			b.WriteString(s)
-			return b.String()
-		}
-		j := strings.IndexByte(s[i:], 'm')
-		if j < 0 {
-			b.WriteString(s)
-			return b.String()
-		}
-		b.WriteString(s[:i] + "<" + s[i+2:i+j] + ">")
-		s = s[i+j+1:]
-	}
+	return sgrRe.ReplaceAllStringFunc(s, func(m string) string { return "<" + m[2:len(m)-1] + ">" })
 }
 
 // renderMD feeds the pieces one after another and flushes at the end.
@@ -154,6 +140,11 @@ func TestMarkdownFlush(t *testing.T) {
 	got = m.feed("## Hea") + "|" + m.flush()
 	if want := "<0;1;35>Hea|<0>"; sgr(got) != want {
 		t.Errorf("got  %q\nwant %q", sgr(got), want)
+	}
+	// A character cut at the end is not lost.
+	m = markdown{}
+	if got := m.feed("a\xd0") + m.flush(); got != "a\ufffd" {
+		t.Errorf("got %q", got)
 	}
 	// A code block goes on after the interruption.
 	m = markdown{}

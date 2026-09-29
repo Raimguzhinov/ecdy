@@ -129,3 +129,50 @@ func TestVerboseOutputTruncated(t *testing.T) {
 		t.Errorf("got %d lines:\n%s", n, got)
 	}
 }
+
+func TestMarkdownText(t *testing.T) {
+	o := Options{Markdown: true, Rewrite: true, Verbose: true}
+	tests := []struct {
+		name    string
+		updates []acp.SessionUpdate
+		want    string
+	}{
+		{
+			name:    "rendered as it streams",
+			updates: []acp.SessionUpdate{acp.UpdateAgentMessageText("a **b"), acp.UpdateAgentMessageText("** c\n- d\n")},
+			want:    "a <0;1>b<0> c\n• d\n",
+		},
+		{
+			name:    "a line is ended before a tool call",
+			updates: []acp.SessionUpdate{acp.UpdateAgentMessageText("## Head"), readMain, status("t1", acp.ToolCallStatusCompleted), acp.UpdateAgentMessageText("more")},
+			want:    "<0;1;35>Head<0>\n⚙ Read main.go\r\x1b[2K⚙ Read main.go ✓\nmore\n",
+		},
+		{
+			name:    "a code block goes on after a tool call",
+			updates: []acp.SessionUpdate{acp.UpdateAgentMessageText("```\nx\n"), readMain, status("t1", acp.ToolCallStatusCompleted), acp.UpdateAgentMessageText("*y*\n```\n")},
+			want:    "<0;2>```<0>\n<0;36>x<0>\n⚙ Read main.go\r\x1b[2K⚙ Read main.go ✓\n<0;36>*y*<0>\n<0;2>```<0>\n",
+		},
+		{
+			name:    "thoughts are not markdown",
+			updates: []acp.SessionUpdate{acp.UpdateAgentMessageText("**a"), acp.UpdateAgentThoughtText("**b**")},
+			want:    "<0;1>a<0>\n**b**\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sgr(run(o, tt.updates...)); got != tt.want {
+				t.Errorf("got\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+	var b strings.Builder
+	r := New(&b, o)
+	r.Update(acp.UpdateAgentMessageText("say *it"))
+	resume := r.Pause()
+	b.WriteString("[dialog]\n")
+	resume()
+	r.Notice("done")
+	if got, want := sgr(b.String()), "say <0;3>it<0>\n[dialog]\ndone\n"; got != want {
+		t.Errorf("pause: got %q, want %q", got, want)
+	}
+}

@@ -205,3 +205,110 @@ func FuzzClean(f *testing.F) {
 		}
 	})
 }
+
+func width(n int) func() int { return func() int { return n } }
+
+// TestLiveOutput: on a terminal with -v, the last lines of a running
+// command's output are drawn under its status line and redrawn in place.
+func TestLiveOutput(t *testing.T) {
+	o := Options{Verbose: true, Rewrite: true, Width: width(20)}
+	tests := []struct {
+		name    string
+		o       Options
+		updates []acp.SessionUpdate
+		want    string
+	}{
+		{
+			name:    "drawn and redrawn, then the final output",
+			o:       o,
+			updates: []acp.SessionUpdate{goTest, termOut("t2", "terminal_output_delta", "a\nb\n"), termOut("t2", "terminal_output_delta", "c"), finishedInTerminal("t2")},
+			want: "$ go test ./..." +
+				"\r\x1b[2K$ go test ./...\n  │ a\n  │ b" +
+				"\r\x1b[2A\x1b[J$ go test ./...\n  │ a\n  │ b\n  │ c" +
+				"\r\x1b[3A\x1b[J$ go test ./... ✓\n  │ a\n  │ b\n  │ c\n",
+		},
+		{
+			name:    "erased when other output comes",
+			o:       o,
+			updates: []acp.SessionUpdate{goTest, termOut("t2", "terminal_output_delta", "a\n"), acp.UpdateAgentMessageText("hi"), finishedInTerminal("t2")},
+			want: "$ go test ./..." +
+				"\r\x1b[2K$ go test ./...\n  │ a" +
+				"\r\x1b[1A\x1b[J$ go test ./...\nhi\n$ go test ./... ✓\n  │ a\n",
+		},
+		{
+			name:    "the last 5 lines, cut to the width",
+			o:       o,
+			updates: []acp.SessionUpdate{goTest, termOut("t2", "terminal_output_delta", "1\n2\n3\n4\n5\n6 is a long line of output\n")},
+			want: "$ go test ./..." +
+				"\r\x1b[2K$ go test ./...\n  │ 2\n  │ 3\n  │ 4\n  │ 5\n  │ 6 is a long li…" +
+				// The turn ends with the command still running.
+				"\r\x1b[5A\x1b[J$ go test ./...\n",
+		},
+		{
+			name:    "not a terminal: nothing live",
+			o:       Options{Verbose: true, Width: width(20)},
+			updates: []acp.SessionUpdate{goTest, termOut("t2", "terminal_output_delta", "a\n"), finishedInTerminal("t2")},
+			want:    "$ go test ./...\n$ go test ./... ✓\n  │ a\n",
+		},
+		{
+			name:    "not verbose: nothing live",
+			o:       Options{Rewrite: true, Width: width(20)},
+			updates: []acp.SessionUpdate{goTest, termOut("t2", "terminal_output_delta", "a\n"), finishedInTerminal("t2")},
+			want:    "$ go test ./...\r\x1b[2K$ go test ./... ✓\n",
+		},
+		{
+			name:    "a running tool call further up is not drawn",
+			o:       o,
+			updates: []acp.SessionUpdate{goTest, readMain, termOut("t2", "terminal_output_delta", "a\n"), status("t1", acp.ToolCallStatusCompleted), finishedInTerminal("t2")},
+			want:    "$ go test ./...\n⚙ Read main.go\r\x1b[2K⚙ Read main.go ✓\n$ go test ./... ✓\n  │ a\n",
+		},
+		{
+			name:    "the status line is cut to the width while it is open",
+			o:       o,
+			updates: []acp.SessionUpdate{acp.StartToolCall("t4", "go test -run TestSomethingLong ./...", acp.WithStartKind(acp.ToolKindExecute)), finishedInTerminal("t4")},
+			want:    "$ go test -run Tes…\r\x1b[2K$ go test -run TestSomethingLong ./... ✓\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := run(tt.o, tt.updates...); got != tt.want {
+				t.Errorf("got\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFit(t *testing.T) {
+	tests := []struct {
+		in   string
+		w    int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"exactly10!", 10, "exactly10!"},
+		{"eleven chars", 10, "eleven ch…"},
+		{"a\tb", 10, "a       b"},
+		{"a\tb", 5, "a   …"},
+		{"日本語テキスト", 7, "日本語…"},
+		{"日本語", 6, "日本語"},
+		{"x", 0, ""},
+	}
+	for _, tt := range tests {
+		if got := fit(tt.in, tt.w); got != tt.want {
+			t.Errorf("fit(%q, %d) = %q, want %q", tt.in, tt.w, got, tt.want)
+		}
+	}
+}
+
+// TestLiveOutputCutTail: the live view cleans only the end of the output;
+// the line its start falls in is not shown.
+func TestLiveOutputCutTail(t *testing.T) {
+	var b strings.Builder
+	r := New(&b, Options{Verbose: true, Rewrite: true, Width: width(40)})
+	r.Update(goTest)
+	r.Update(termOut("t2", "terminal_output_delta", strings.Repeat("x", 2*liveTailBytes)+"\nlast\n"))
+	got := b.String()
+	if !strings.HasSuffix(got, "\n  │ last") || strings.Contains(got, "│ xxx") {
+		t.Errorf("got %q", got)
+	}
+}

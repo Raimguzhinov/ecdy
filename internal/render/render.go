@@ -1,6 +1,6 @@
 // Package render prints an agent's turn to the terminal as it streams in:
-// message text as is, each tool call as one status line, ecdy's own notices
-// dimmed.
+// message text as is or as rendered markdown, each tool call as one status
+// line, ecdy's own notices dimmed.
 package render
 
 import (
@@ -22,6 +22,13 @@ type Options struct {
 	// Verbose also prints thoughts, plans and the output of finished tool
 	// calls.
 	Verbose bool
+	// Markdown renders the agent's message text (docs/adr/0006-ux.md). For
+	// terminals with colors.
+	Markdown bool
+	// Width returns the terminal's width. With Rewrite and Verbose, it lets
+	// a running command's output be drawn live under its status line, and
+	// the open status line is cut to it.
+	Width func() int
 }
 
 // Renderer is safe for concurrent use.
@@ -34,6 +41,12 @@ type Renderer struct {
 	tools map[acp.ToolCallId]*tool
 	last  acp.ToolCallId // the tool call whose status line was printed last, if nothing followed it
 	mode  string         // "", "text" or "thought": what the current line is
+	md    *markdown      // with Options.Markdown
+
+	// The open status line of last as printed, and how many rows of live
+	// output are drawn under it.
+	lastLine string
+	live     int
 }
 
 type tool struct {
@@ -46,8 +59,15 @@ type tool struct {
 
 // New returns a Renderer writing to w.
 func New(w io.Writer, o Options) *Renderer {
-	return &Renderer{o: o, w: w, col0: true, tools: map[acp.ToolCallId]*tool{}}
+	r := &Renderer{o: o, w: w, col0: true, tools: map[acp.ToolCallId]*tool{}}
+	if o.Markdown {
+		r.md = &markdown{}
+	}
+	return r
 }
+
+// liveLines is how many lines of a running command's output are drawn.
+const liveLines = 5
 
 const (
 	dim   = "\x1b[2m"
@@ -73,8 +93,17 @@ func (r *Renderer) write(s string) {
 	r.col0 = strings.HasSuffix(s, "\n")
 }
 
-// line starts a new line if the cursor is not at the start of one.
+// line starts a new line if the cursor is not at the start of one. It first
+// ends the markdown line in progress and erases live output: something else
+// is about to be printed.
 func (r *Renderer) line() {
+	if r.md != nil {
+		r.write(r.md.flush())
+	}
+	if r.live > 0 {
+		r.write(r.erase() + r.lastLine)
+		r.live = 0
+	}
 	if !r.col0 {
 		r.write("\n")
 	}
@@ -113,6 +142,10 @@ func (r *Renderer) text(mode string, c acp.ContentBlock, style string) {
 		r.line()
 	}
 	r.mode, r.last = mode, ""
+	if mode == "text" && r.md != nil {
+		r.write(r.md.feed(c.Text.Text))
+		return
+	}
 	if style != "" && r.o.Color {
 		// Style each piece: a chunk may be followed by a dialog or a notice.
 		r.write(style + c.Text.Text + reset)
@@ -141,8 +174,8 @@ func (r *Renderer) toolUpdate(u *acp.SessionToolCallUpdate) {
 	if u.Content != nil {
 		t.output = u.Content
 	}
-	if r.o.Verbose {
-		t.term.addMeta(u.Meta)
+	if r.o.Verbose && t.term.addMeta(u.Meta) && r.liveOn() && r.last == u.ToolCallId && !done(t.status) {
+		r.drawLive(t)
 	}
 	if t.title == prev.title && t.status == prev.status && prev.title != "" {
 		return
@@ -162,7 +195,8 @@ func done(s acp.ToolCallStatus) bool {
 // that is the last line and the output is a terminal.
 func (r *Renderer) toolLine(id acp.ToolCallId, t *tool) {
 	if r.o.Rewrite && r.last == id {
-		r.write("\r\x1b[2K")
+		r.write(r.erase())
+		r.live = 0
 	} else {
 		r.line()
 	}
@@ -170,7 +204,12 @@ func (r *Renderer) toolLine(id acp.ToolCallId, t *tool) {
 	if t.kind == acp.ToolKindExecute {
 		icon = "$"
 	}
-	s := r.style(dim, icon+" ") + oneLine(t.title)
+	title := oneLine(t.title)
+	if r.o.Rewrite && r.o.Width != nil && !done(t.status) {
+		// An open line must fit in one row to be redrawn in place.
+		title = fit(icon+" "+title, r.o.Width()-1)[len(icon)+1:]
+	}
+	s := r.style(dim, icon+" ") + title
 	switch t.status {
 	case acp.ToolCallStatusCompleted:
 		s += " " + r.style(green, "✓")
@@ -189,7 +228,39 @@ func (r *Renderer) toolLine(id acp.ToolCallId, t *tool) {
 		return
 	}
 	r.write(s)
-	r.last = id
+	r.last, r.lastLine = id, s
+	if r.liveOn() && len(t.term.b) > 0 {
+		r.drawLive(t)
+	}
+}
+
+func (r *Renderer) liveOn() bool { return r.o.Verbose && r.o.Rewrite && r.o.Width != nil }
+
+// erase returns what moves the cursor to the start of the open status line
+// and clears it along with the live output under it.
+func (r *Renderer) erase() string {
+	if r.live == 0 {
+		return "\r\x1b[2K"
+	}
+	return fmt.Sprintf("\r\x1b[%dA\x1b[J", r.live)
+}
+
+// drawLive redraws the open status line of the last tool call with the last
+// lines of its command output under it. Each line is cut to the terminal
+// width, so that it takes exactly one row and erase can count them.
+func (r *Renderer) drawLive(t *tool) {
+	lines := t.term.tail(liveLines)
+	if len(lines) == 0 && r.live == 0 {
+		return
+	}
+	var b strings.Builder
+	b.WriteString(r.erase() + r.lastLine)
+	w := r.o.Width() - 1
+	for _, l := range lines {
+		b.WriteString("\n" + r.style(dim, fit("  │ "+l, w)))
+	}
+	r.write(b.String())
+	r.live = len(lines)
 }
 
 // output prints the text of a finished tool call, indented (verbose only):

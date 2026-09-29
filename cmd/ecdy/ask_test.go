@@ -433,3 +433,51 @@ func TestAskNoPrompt(t *testing.T) {
 		t.Fatal("ask without a prompt: expected error")
 	}
 }
+
+// On a terminal the reply is rendered as markdown; into a pipe it is the
+// agent's text as is.
+func TestAskMarkdown(t *testing.T) { forEachMode(t, testAskMarkdown) }
+
+func testAskMarkdown(t *testing.T, m mode) {
+	script := fakeagent.Script{Turn: []fakeagent.Step{{Text: "# Title\nsome **bold** and `code`\x1b]0;pwned\x07\n"}}}
+	e := newAskEnv(t, m, script)
+	term := e.start(t, "--", "md")
+	term.Expect("\x1b[0;1;35mTitle\x1b[0m\r\n")
+	term.Expect("some \x1b[0;1mbold\x1b[0m and \x1b[0;36mcode\x1b[0m\r\n")
+	expectExit(t, term, 0)
+	if strings.Contains(term.Output(), "pwned") {
+		t.Errorf("an escape sequence of the agent reached the terminal: %q", term.Output())
+	}
+
+	e = newAskEnv(t, m, script)
+	cmd := e.command("--", "md")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("ecdy ask: %v\n%s", err, stderr.String())
+	}
+	if want := script.Turn[0].Text; stdout.String() != want {
+		t.Errorf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
+// With -v on a terminal, a running command's output is drawn under its
+// status line and redrawn as it grows (docs/adr/0006-ux.md).
+func TestAskLiveOutput(t *testing.T) { forEachMode(t, testAskLiveOutput) }
+
+func testAskLiveOutput(t *testing.T, m mode) {
+	e := newAskEnv(t, m, fakeagent.Script{Turn: []fakeagent.Step{
+		{Tool: &fakeagent.Tool{ID: "t1", Title: "go test ./...", Kind: "execute"}},
+		{TerminalOutput: &fakeagent.TerminalOutput{ID: "t1", Key: "terminal_output_delta", Data: "ok\tpkg/a\n"}},
+		{TerminalOutput: &fakeagent.TerminalOutput{ID: "t1", Key: "terminal_output_delta", Data: "FAIL\tpkg/b\n"}},
+		{ToolDone: &fakeagent.Tool{ID: "t1", Status: "failed", Terminal: true}},
+	}})
+	term := e.start(t, "-v", "--", "test")
+	term.Expect("\x1b[2m  │ ok  pkg/a\x1b[0m") // drawn live, the tab expanded
+	term.Expect("\r\x1b[1A\x1b[J")             // redrawn over itself
+	term.Expect("\x1b[2m  │ FAIL        pkg/b\x1b[0m")
+	term.Expect("\r\x1b[2A\x1b[J\x1b[2m$ \x1b[0mgo test ./... \x1b[31m✗") // the final line replaces it
+	term.Expect("  │ FAIL\tpkg/b")
+	expectExit(t, term, 0)
+}

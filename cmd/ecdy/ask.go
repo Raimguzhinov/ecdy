@@ -68,7 +68,7 @@ func runAsk(cmd *cobra.Command, agentName string, verbose bool, prompt string) e
 	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	onTerm := isTerminal(stdout)
 	color := onTerm && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
-	r := render.New(stdout, render.Options{Color: color, Rewrite: onTerm, Verbose: verbose})
+	r := render.New(stdout, render.Options{Color: color, Rewrite: onTerm, Verbose: verbose, Markdown: color, Width: termWidth(stdout)})
 	h := &askHandler{r: r, stderr: stderr, color: color}
 
 	ctx, cancel := context.WithCancel(cmd.Context())
@@ -243,6 +243,19 @@ func (h *askHandler) Permission(ctx context.Context, req acp.RequestPermissionRe
 		return outcome, daemon.ErrInterrupted
 	}
 	return outcome, err
+}
+
+// termWidth returns a function reporting w's width in columns, asked at
+// each call so that a resize is seen; 80 if it cannot tell.
+func termWidth(w io.Writer) func() int {
+	return func() int {
+		if f, ok := w.(*os.File); ok {
+			if cols, _, err := term.GetSize(int(f.Fd())); err == nil && cols > 0 {
+				return cols
+			}
+		}
+		return 80
+	}
 }
 
 func isTerminal(w io.Writer) bool {

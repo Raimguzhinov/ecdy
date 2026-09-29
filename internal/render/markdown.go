@@ -255,8 +255,8 @@ func (m *markdown) decide(eol bool) bool {
 		}
 		if ind+1 < len(l) && l[ind+1] == ' ' {
 			rest := string(l[ind+2:])
-			if !eol && len(rest) < 4 && (strings.HasPrefix("[ ] ", rest) || strings.HasPrefix("[x] ", rest) || strings.HasPrefix("[X] ", rest)) {
-				return false // maybe a task
+			if !eol && maybeTask(rest) {
+				return false
 			}
 			m.emit("", string(l[:ind])+"• ")
 			m.pos = ind + 2
@@ -275,6 +275,16 @@ func (m *markdown) decide(eol bool) bool {
 	// Anything else, ordered list items included, is a paragraph.
 	m.pos = 0
 	return true
+}
+
+// maybeTask reports whether s may still become a task's checkbox.
+func maybeTask(s string) bool {
+	for _, box := range []string{"[ ] ", "[x] ", "[X] "} {
+		if len(s) < len(box) && strings.HasPrefix(box, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // decideInFence tells a closing fence from a line of code.
@@ -528,9 +538,10 @@ func (s *sanitizer) feed(in string) string {
 			continue
 		case escString:
 			i++
-			if c == 0x07 {
+			switch c {
+			case 0x07:
 				s.state = escNone
-			} else if c == 0x1b {
+			case 0x1b:
 				s.state = escStringST
 			}
 			continue
