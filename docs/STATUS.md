@@ -56,6 +56,11 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   - `acpclient`: an agent that exited before `initialize` was written could be reported as
     `initialize: Internal error: write |1: broken pipe` instead of its exit (20 of 50 runs on one
     CPU): a failed request now waits up to 200 ms for the agent to be gone.
+  - The second and later permission dialogs of a turn lost their first key (found in use: `1`
+    had to be pressed twice). `tty` took the descriptor with `File.Fd()`, which switches it to
+    blocking mode, so `Close` no longer ended the reader goroutine's pending `read`, and that
+    goroutine swallowed the next dialog's first key. The descriptor is now taken with
+    `SyscallConn().Control`. `TestAskPermissionTwice` (two dialogs in one turn) hung before.
 - Tests: markdown table (68 cases) split at every byte and in random pieces, flush, `FuzzMarkdown`
   (chunk independence, UTF-8, no controls, line count); live output and `fit` tables; `ecdy ask`
   markdown and live output end to end in both modes; tmux screen tests (`shell/screen_test.go`,
