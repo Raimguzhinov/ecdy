@@ -119,6 +119,7 @@ type Conn struct {
 
 	mu         sync.Mutex
 	session    acp.SessionId
+	banner     string          // the startup banner still to drop (see startupInfo)
 	turnCtx    context.Context // the current turn; nil between turns
 	cancelTurn context.CancelFunc
 
@@ -263,9 +264,37 @@ func (c *Conn) NewSession(ctx context.Context, dir string) error {
 		return c.connErr("session/new", err)
 	}
 	c.mu.Lock()
-	c.session = sess.SessionId
+	c.session, c.banner = sess.SessionId, startupInfo(sess.Meta)
 	c.mu.Unlock()
 	return nil
+}
+
+// startupInfo returns the startup banner pi-acp announces in the _meta of
+// session/new: the pi version, context files, skills and extensions. pi-acp
+// then sends the same text as an agent_message_chunk for editors to show
+// (https://github.com/svkozak/pi-acp, README "Limitations"); in a shell it
+// buries the answer, so it is dropped. pi's own quietStartup setting hides
+// it too, but only for every client of pi.
+func startupInfo(meta map[string]any) string {
+	pi, _ := meta["piAcp"].(map[string]any)
+	s, _ := pi["startupInfo"].(string)
+	return s
+}
+
+// isBanner reports whether u is the startup banner of the session, which is
+// dropped once.
+func (c *Conn) isBanner(u acp.SessionUpdate) bool {
+	m := u.AgentMessageChunk
+	if m == nil || m.Content.Text == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.banner == "" || m.Content.Text.Text != c.banner {
+		return false
+	}
+	c.banner = ""
+	return true
 }
 
 // Session returns the id of the current session.
@@ -436,7 +465,7 @@ var _ acp.Client = (*client)(nil)
 
 func (cl *client) SessionUpdate(ctx context.Context, n acp.SessionNotification) error {
 	defer cl.c.updates.handle()
-	if n.SessionId == cl.c.Session() {
+	if n.SessionId == cl.c.Session() && !cl.c.isBanner(n.Update) {
 		cl.c.handler.SessionUpdate(ctx, n.Update)
 	}
 	return nil

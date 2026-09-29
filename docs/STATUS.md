@@ -70,6 +70,10 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   pending classifier on Enter — was a real bug that a later test caught. Left: one equivalent
   mutant (redrawing a command's line over itself) and one of speed only (a zombie not recognized:
   every redraw waits the full 0.1 s).
+- **pi's start-up banner** is dropped: pi-acp sends it as a message chunk right after
+  `session/new` (so it showed before the first answer of every new shell) and puts the same text
+  in the response's `_meta.piAcp.startupInfo`; the one chunk equal to it is skipped, without
+  touching pi's `quietStartup`.
 
 ### Verified locally (2026-09-29)
 
