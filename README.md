@@ -31,6 +31,26 @@ eval "$(ecdy init zsh)"
 
 Or source `shell/zsh/ecdy.plugin.zsh` from a plugin manager; it looks for `ecdy` in `$PATH`.
 
+**Nix.** The flake has a Home Manager module, which installs ecdy, loads the plugin at the end of
+`~/.zshrc` and writes the config from `settings`:
+
+```nix
+# flake inputs
+ecdy.url = "github:Raimguzhinov/ecdy";
+ecdy.inputs.nixpkgs.follows = "nixpkgs";
+
+# a Home Manager module
+imports = [ inputs.ecdy.homeManagerModules.default ];
+programs.ecdy = {
+  enable = true;
+  settings.default_agent = "claude";   # ~/.config/ecdy/config.toml
+};
+```
+
+Without Home Manager, `inputs.ecdy.nixosModules.default` with `programs.ecdy.enable = true` loads
+the plugin from `/etc/zshrc` (before `~/.zshrc`, which also works). `overlays.default` adds
+`pkgs.ecdy`. The npx-launched agent presets need `nodejs` on `$PATH`.
+
 On Enter, ecdy classifies the line:
 
 - a **command** runs as usual;
