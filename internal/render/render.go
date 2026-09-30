@@ -29,6 +29,10 @@ type Options struct {
 	// a running command's output be drawn live under its status line, and
 	// the open status line is cut to it.
 	Width func() int
+	// Spacing separates blocks (message text, a run of tool calls, a plan,
+	// a notice) with a blank line, and Pad ends the output with one, so that
+	// the reply stands apart from the prompts around it. For terminals.
+	Spacing bool
 }
 
 // Renderer is safe for concurrent use.
@@ -42,6 +46,8 @@ type Renderer struct {
 	last  acp.ToolCallId // the tool call whose status line was printed last, if nothing followed it
 	mode  string         // "", "text" or "thought": what the current line is
 	md    *markdown      // with Options.Markdown
+	block string         // the kind of the last block printed, "" before any
+	nl    int            // how many newlines the output ends with
 
 	// The open status line of last as printed, and how many rows of live
 	// output are drawn under it.
@@ -91,6 +97,21 @@ func (r *Renderer) write(s string) {
 	}
 	_, _ = io.WriteString(r.w, s)
 	r.col0 = strings.HasSuffix(s, "\n")
+	if t := strings.TrimRight(s, "\n"); t == "" {
+		r.nl += len(s)
+	} else {
+		r.nl = len(s) - len(t)
+	}
+}
+
+// start ends the current line and, with Spacing, leaves a blank line if a
+// block of another kind was printed before.
+func (r *Renderer) start(kind string) {
+	r.line()
+	if r.o.Spacing && r.block != "" && r.block != kind && r.nl < 2 {
+		r.write("\n")
+	}
+	r.block = kind
 }
 
 // line starts a new line if the cursor is not at the start of one. It first
@@ -139,7 +160,7 @@ func (r *Renderer) text(mode string, c acp.ContentBlock, style string) {
 		return
 	}
 	if r.mode != mode {
-		r.line()
+		r.start(mode)
 	}
 	r.mode, r.last = mode, ""
 	if mode == "text" && r.md != nil {
@@ -198,7 +219,7 @@ func (r *Renderer) toolLine(id acp.ToolCallId, t *tool) {
 		r.write(r.erase())
 		r.live = 0
 	} else {
-		r.line()
+		r.start("tool")
 	}
 	icon := "⚙"
 	if t.kind == acp.ToolKindExecute {
@@ -287,7 +308,7 @@ func (r *Renderer) output(t *tool) {
 }
 
 func (r *Renderer) plan(entries []acp.PlanEntry) {
-	r.line()
+	r.start("plan")
 	r.mode, r.last = "", ""
 	r.write(r.style(dim, "Plan:") + "\n")
 	for _, e := range entries {
@@ -306,7 +327,7 @@ func (r *Renderer) plan(entries []acp.PlanEntry) {
 func (r *Renderer) Notice(format string, args ...any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.line()
+	r.start("notice")
 	r.mode, r.last = "", ""
 	r.write(r.style(dim, fmt.Sprintf(format, args...)) + "\n")
 }
@@ -325,6 +346,17 @@ func (r *Renderer) Finish() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.line()
+}
+
+// Pad ends the output with a blank line (Spacing only), so that the next
+// prompt does not stick to the reply. Nothing if nothing was printed.
+func (r *Renderer) Pad() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.line()
+	if r.o.Spacing && r.block != "" && r.nl < 2 {
+		r.write("\n")
+	}
 }
 
 // oneLine returns the first line of s, marking anything cut off.
