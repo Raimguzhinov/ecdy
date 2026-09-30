@@ -29,6 +29,15 @@
             "-w"
             "-X main.version=${version}"
           ];
+          nativeBuildInputs = [ pkgs.installShellFiles ];
+          # cobra's `completion` command; the NixOS and Home Manager zsh
+          # modules add share/zsh/site-functions of installed packages to fpath.
+          postInstall = pkgs.lib.optionalString (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
+            installShellCompletion --cmd ecdy \
+              --bash <($out/bin/ecdy completion bash) \
+              --fish <($out/bin/ecdy completion fish) \
+              --zsh <($out/bin/ecdy completion zsh)
+          '';
           meta = {
             description = "Type in zsh; prompts go to your ACP agent";
             homepage = "https://github.com/Raimguzhinov/ecdy";

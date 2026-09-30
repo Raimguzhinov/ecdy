@@ -102,6 +102,10 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   `nix develop .#demo -c docs/demo/render.sh`. The `demo` devShell pins VHS 0.11.0: 0.12.0 exits
   0 without writing any output.
 
+- **Nix completions**: the package installs cobra's zsh, bash and fish completions
+  (`share/zsh/site-functions/_ecdy` etc.), so the NixOS and Home Manager modules get them with
+  the package; checked in `zsh -f` with the plugin loaded (`$_comps[ecdy]` is `_ecdy`).
+
 ### Verified locally (2026-09-29)
 
 - `nix develop .#zsh-matrix -c go test -race ./...` — green (2:02); `golangci-lint run` — 0 issues;
