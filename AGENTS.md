@@ -297,6 +297,10 @@ User installation (like atuin/zoxide): `eval "$(ecdy init zsh)"` in `.zshrc`.
   oldest supported, 5.9, the latest); CI runs the same devShell. PTY tests also run with
   `-race -count=20` before a PR, and on one CPU after timing-sensitive changes.
 - **Reproduce a CI failure before fixing it**, and do not guess from the log alone.
+- **External tools come from nix** (a devShell, pinned by the lock), never from the machine. Before
+  building on one, smoke-test it with a one-line input in that same shell and check that its output
+  exists: some tools (VHS) exit 0 without writing anything. When a run fails silently, compare it
+  with a working one (version, environment, flags) and change one difference at a time.
 - **Skills for coding agents** live in `.agents/skills/` (`.claude/skills` is a symlink to it):
   `ci-repro` reproduces the CI jobs locally, `milestone-finish` is the checklist before a PR,
   `demo-gif` re-renders the README's demo.
