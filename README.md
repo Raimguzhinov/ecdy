@@ -49,7 +49,9 @@ programs.ecdy = {
 
 Without Home Manager, `inputs.ecdy.nixosModules.default` with `programs.ecdy.enable = true` loads
 the plugin from `/etc/zshrc` (before `~/.zshrc`, which also works). `overlays.default` adds
-`pkgs.ecdy`. The npx-launched agent presets need `nodejs` on `$PATH`.
+`pkgs.ecdy`. The package ships zsh, bash and fish completions (`ecdy completion zsh`), which
+both modules' zsh picks up when completion is enabled (`programs.zsh.enableCompletion`, the
+default). The npx-launched agent presets need `nodejs` on `$PATH`.
 
 On Enter, ecdy classifies the line:
 
