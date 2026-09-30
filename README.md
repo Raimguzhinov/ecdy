@@ -12,6 +12,8 @@ or a prompt: commands run in zsh as usual, prompts go to any agent that speaks t
 ecdy is not a terminal emulator, not a new shell language, and not an agent or LLM client of its own.
 It uses your agents' own logins and subscriptions; there is no ecdy cloud and no telemetry.
 
+![ecdy: commands run in zsh, prompts go to the agent, permissions, the Ask dialog, typo fixes, switching agents](docs/demo/demo.gif)
+
 ## Safety
 
 - A prompt is never executed as a command. When the classifier is unsure, it asks.
@@ -216,6 +218,7 @@ golangci-lint run
 go run ./cmd/ecdy version
 go run ./cmd/ecdy classify --json --first-kind=command -- 'rm everything in tmp except configs'
 nix build && ./result/bin/ecdy version
+nix develop .#demo -c docs/demo/render.sh      # re-render the demo GIF from docs/demo/*.tape
 ```
 
 Design, invariants and contribution rules (for humans and coding agents alike) are in [AGENTS.md](AGENTS.md).

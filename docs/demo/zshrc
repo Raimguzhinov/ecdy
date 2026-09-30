@@ -1,0 +1,8 @@
+# The demo's shell: a clean zsh, not anyone's config.
+autoload -Uz vcs_info
+zstyle ':vcs_info:git:*' formats " %F{#a6e3a1}"$'\ue0a0'" %b%f"
+precmd() { vcs_info }
+setopt prompt_subst
+PROMPT='%F{#89b4fa}%~%f${vcs_info_msg_0_} %F{#cba6f7}❯%f '
+RPROMPT=''
+eval "$(ecdy init zsh)"

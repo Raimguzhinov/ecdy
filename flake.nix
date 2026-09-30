@@ -85,6 +85,29 @@
               builtins.attrValues zshVersions
             );
           };
+          # Renders the README's demo GIF from docs/demo/*.tape:
+          #   nix develop .#demo -c docs/demo/render.sh
+          demo = default.overrideAttrs (old: {
+            nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+              # vhs 0.12.0 prints "Creating demo.gif..." and writes
+              # nothing; 0.11.0 works.
+              (pkgs.vhs.overrideAttrs rec {
+                version = "0.11.0";
+                src = pkgs.fetchFromGitHub {
+                  owner = "charmbracelet";
+                  repo = "vhs";
+                  rev = "v${version}";
+                  hash = "sha256-VOiI+ddiax04QtCcDr6ze53kd/HHGbfQE3j/32iq4Ro=";
+                };
+                vendorHash = "sha256-cgKLYUATtn4hMdIOXZe9JWYNUOrX3S6BDfvS+rIWDfM=";
+              })
+              pkgs.ffmpeg
+              pkgs.git
+            ];
+            # Only this font, so that the recording looks the same everywhere.
+            FONTCONFIG_FILE = pkgs.makeFontsConf { fontDirectories = [ pkgs.nerd-fonts.jetbrains-mono ]; };
+            ECDY_DEMO_FONT = "${pkgs.nerd-fonts.jetbrains-mono}/share/fonts/truetype/NerdFonts/JetBrainsMono";
+          });
         }
       );
 

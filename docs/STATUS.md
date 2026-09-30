@@ -96,6 +96,11 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   reports). A terminal's close killed the shell only: what it left in the background (atuin's
   `(atuin history end ... &)`) wrote into `$HOME` while it was removed and kept the PTY open; the
   PTY's whole session is killed now (`TestCloseKillsSession`).
+- **Demo GIF** in the README (`docs/demo/`, skill `demo-gif`): seven VHS scenes (commands,
+  prompts, session context, permissions, the Ask dialog, typo fix, `ecdy use`) with the real
+  plugin and binary against a scripted ACP agent, joined by ffmpeg with captions and transitions.
+  `nix develop .#demo -c docs/demo/render.sh`. The `demo` devShell pins VHS 0.11.0: 0.12.0 exits
+  0 without writing any output.
 
 - **Nix completions**: the package installs cobra's zsh, bash and fish completions
   (`share/zsh/site-functions/_ecdy` etc.), so the NixOS and Home Manager modules get them with

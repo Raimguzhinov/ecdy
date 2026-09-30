@@ -247,6 +247,7 @@ shell/zsh/           ecdy.plugin.zsh (embedded into the binary, served by `ecdy 
 docs/adr/            architecture decisions (NNNN-title.md)
 docs/ROADMAP.md      milestones and their definitions of done
 docs/STATUS.md       current milestone, what's done, what's next
+docs/demo/           the README's demo GIF: VHS tapes, a scripted agent, render.sh
 flake.nix            devShell (go, gopls, golangci-lint, zsh, tmux, nodejs for npx agents) + package
 nix/zsh-versions.nix zsh releases for the zsh-matrix devShell (PTY tests on every supported zsh)
 .agents/skills/      skills for coding agents (.claude/skills is a symlink to it)
@@ -296,8 +297,13 @@ User installation (like atuin/zoxide): `eval "$(ecdy init zsh)"` in `.zshrc`.
   oldest supported, 5.9, the latest); CI runs the same devShell. PTY tests also run with
   `-race -count=20` before a PR, and on one CPU after timing-sensitive changes.
 - **Reproduce a CI failure before fixing it**, and do not guess from the log alone.
+- **External tools come from nix** (a devShell, pinned by the lock), never from the machine. Before
+  building on one, smoke-test it with a one-line input in that same shell and check that its output
+  exists: some tools (VHS) exit 0 without writing anything. When a run fails silently, compare it
+  with a working one (version, environment, flags) and change one difference at a time.
 - **Skills for coding agents** live in `.agents/skills/` (`.claude/skills` is a symlink to it):
-  `ci-repro` reproduces the CI jobs locally, `milestone-finish` is the checklist before a PR.
+  `ci-repro` reproduces the CI jobs locally, `milestone-finish` is the checklist before a PR,
+  `demo-gif` re-renders the README's demo.
 - Everything in the repository is in English: code, comments, user docs and this file.
 - Go: no global state, `context.Context` as the first argument, wrap errors with `%w`,
   no `panic` outside `main`. No `golangci-lint` exclusions without a "why" comment.
