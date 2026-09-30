@@ -68,7 +68,8 @@ func runAsk(cmd *cobra.Command, agentName string, verbose bool, prompt string) e
 	stdout, stderr := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	onTerm := isTerminal(stdout)
 	color := onTerm && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
-	r := render.New(stdout, render.Options{Color: color, Rewrite: onTerm, Verbose: verbose, Markdown: color, Width: termWidth(stdout)})
+	r := render.New(stdout, render.Options{Color: color, Rewrite: onTerm, Verbose: verbose, Markdown: color, Width: termWidth(stdout), Spacing: onTerm})
+	defer r.Pad()
 	h := &askHandler{r: r, stderr: stderr, color: color}
 
 	ctx, cancel := context.WithCancel(cmd.Context())

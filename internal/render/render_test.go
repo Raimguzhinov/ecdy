@@ -176,3 +176,86 @@ func TestMarkdownText(t *testing.T) {
 		t.Errorf("pause: got %q, want %q", got, want)
 	}
 }
+
+func TestSpacing(t *testing.T) {
+	o := Options{Rewrite: true, Spacing: true}
+	tests := []struct {
+		name    string
+		o       Options
+		updates []acp.SessionUpdate
+		want    string
+	}{
+		{
+			name:    "text, tool calls, text",
+			updates: []acp.SessionUpdate{acp.UpdateAgentMessageText("Let me look."), readMain, status("t1", acp.ToolCallStatusCompleted), goTest, status("t2", acp.ToolCallStatusCompleted), acp.UpdateAgentMessageText("Done.")},
+			want:    "Let me look.\n\n⚙ Read main.go\r\x1b[2K⚙ Read main.go ✓\n$ go test ./...\r\x1b[2K$ go test ./... ✓\n\nDone.\n\n",
+		},
+		{
+			name:    "no second blank line after a paragraph",
+			updates: []acp.SessionUpdate{acp.UpdateAgentMessageText("Para.\n"), acp.UpdateAgentMessageText("\n"), readMain, status("t1", acp.ToolCallStatusCompleted), acp.UpdateAgentMessageText("End.\n\n")},
+			want:    "Para.\n\n⚙ Read main.go\r\x1b[2K⚙ Read main.go ✓\n\nEnd.\n\n",
+		},
+		{
+			name:    "a finished tool call further up",
+			updates: []acp.SessionUpdate{goTest, acp.UpdateAgentMessageText("waiting"), status("t2", acp.ToolCallStatusFailed)},
+			want:    "$ go test ./...\n\nwaiting\n\n$ go test ./... ✗\n\n",
+		},
+		{
+			name:    "thoughts and plans are blocks",
+			o:       Options{Verbose: true, Spacing: true},
+			updates: []acp.SessionUpdate{acp.UpdateAgentThoughtText("hmm"), acp.UpdatePlan(acp.PlanEntry{Content: "read"}), acp.UpdateAgentMessageText("ok")},
+			want:    "hmm\n\nPlan:\n  ○ read\n\nok\n\n",
+		},
+		{
+			name:    "markdown",
+			o:       Options{Markdown: true, Rewrite: true, Spacing: true},
+			updates: []acp.SessionUpdate{acp.UpdateAgentMessageText("# A"), readMain, status("t1", acp.ToolCallStatusCompleted)},
+			want:    "<0;1;35>A<0>\n\n⚙ Read main.go\r\x1b[2K⚙ Read main.go ✓\n\n",
+		},
+		{
+			name: "nothing printed, nothing padded",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.o.Spacing {
+				tt.o = o
+			}
+			var b strings.Builder
+			r := New(&b, tt.o)
+			for _, u := range tt.updates {
+				r.Update(u)
+			}
+			r.Finish()
+			r.Pad()
+			r.Pad()
+			if got := sgr(b.String()); got != tt.want {
+				t.Errorf("got\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSpacingNotices(t *testing.T) {
+	var b strings.Builder
+	r := New(&b, Options{Rewrite: true, Spacing: true})
+	r.Update(acp.UpdateAgentMessageText("partial"))
+	r.Notice("cancelling")
+	r.Notice("cancelled")
+	r.Pad()
+	if got, want := b.String(), "partial\n\ncancelling\ncancelled\n\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestNoSpacingByDefault(t *testing.T) {
+	var b strings.Builder
+	r := New(&b, Options{})
+	r.Update(acp.UpdateAgentMessageText("a"))
+	r.Update(readMain)
+	r.Pad()
+	if got, want := b.String(), "a\n⚙ Read main.go\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

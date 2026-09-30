@@ -38,6 +38,10 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   `_meta` output under its status line, redrawn in place, each cut to the terminal width (`fit`:
   tabs, East Asian wide characters); erased before anything else is printed. The open status line
   is cut to the width too.
+- **Spacing** (terminal only): a blank line between blocks of the reply (message text, a run of
+  tool calls, a plan, notices) and one after the reply, so that it stands apart from the next
+  prompt; none added after a paragraph that already ends with one. A pipe gets the output as
+  before.
 - **Scrollback**: `zle-line-finish` writes the typed line over the rewritten `ecdy ask -- '…'`
   (`CURSOR=0; zle -R`, then `ESC 7` line `ESC [J` `ESC 8`); the history already had it (M2).
 - **`ecdy doctor`** (`internal/doctor`, pure checks): the ecdy the plugin runs, the config, each
