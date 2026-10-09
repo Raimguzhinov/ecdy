@@ -7,7 +7,7 @@
 #   prompt → the buffer is rewritten to `ecdy ask -- '<prompt>'` and run, so the
 #            agent gets a regular foreground process (TTY, Ctrl+C, job control);
 #   ask    → a one-key dialog below the line; Enter sends the line to the agent.
-# Alt+Enter runs the line as a command without classification.
+# Ctrl+X Enter (ECDY_FORCE_KEY) runs the line as a command without classification.
 #
 # Fail-open (AGENTS.md, invariant 2): if the binary is missing, crashes, prints
 # garbage or misses the deadline, the line is accepted exactly like vanilla zsh.
@@ -16,6 +16,8 @@
 # Settings (set before loading):
 #   ECDY_BIN               ecdy executable (default: `ecdy` from $PATH)
 #   ECDY_CLASSIFY_TIMEOUT  classification deadline in seconds (default: 0.5)
+#   ECDY_FORCE_KEY         key that runs the line as a command, in bindkey
+#                          notation (default: '^X^M', Ctrl+X Enter)
 #   ECDY_INDICATOR         rprompt (default): what Enter will do is shown in
 #                          front of RPROMPT while typing; var: only set
 #                          $ECDY_VERDICT (cmd, prompt, ask or empty) and redraw,
@@ -87,14 +89,24 @@ typeset -gA _ecdy_precommand_arg_flags=(
 
 # _ecdy_first_kind LINE — set REPLY to the kind of the first command word the way
 # `whence -w` names it: alias, reserved, function, builtin, command or none.
-# Assignments, precommand modifiers and leading redirections are skipped, like
+# Leading blank lines, comment lines with INTERACTIVE_COMMENTS, assignments,
+# precommand modifiers and leading redirections are skipped, like
 # classify.FirstWord does. Uses parameter lookups instead of $(whence -w) to
 # avoid a fork on every Enter (hence REPLY rather than stdout, too).
 _ecdy_first_kind() {
-  emulate -L zsh
+  emulate -L zsh # keeps INTERACTIVE_COMMENTS
   setopt extendedglob
+  local line=${1##[[:space:]]#}
+  # Not (Z+C+): it strips comments whatever the option, and keeps a `;` for
+  # every newline, which reads as an empty first command.
+  if [[ -o interactivecomments ]]; then
+    while [[ $line == '#'* ]]; do
+      [[ $line == *$'\n'* ]] && line=${line#*$'\n'} || line=''
+      line=${line##[[:space:]]#}
+    done
+  fi
   local -a words
-  words=(${(z)1}) # split like the shell parser would (zshexpn, "(z)")
+  words=(${(z)line}) # split like the shell parser would (zshexpn, "(z)")
   local w pre='' word=''
   integer skip=0 redir=0
   for w in $words; do
@@ -138,15 +150,16 @@ _ecdy_classify() {
   reply=()
   local bin=${ECDY_BIN:-ecdy} timeout=${ECDY_CLASSIFY_TIMEOUT:-0.5}
   whence -p -- $bin >/dev/null 2>&1 || return 1
-  local REPLY kind fd pid field
+  local REPLY kind fd pid field comments=false
   _ecdy_first_kind $1
   kind=$REPLY
+  [[ -o interactivecomments ]] && comments=true
   local -a fields
   # The subshell first reports its pid, then execs ecdy in place, so the pid
   # is ecdy's and a hung classifier can be killed after the deadline.
   exec {fd}< <(
     print -rn -- "${sysparams[pid]:-}"$'\0'
-    exec command $bin classify --shell=zsh --format=nul --first-kind=$kind -- $1 2>/dev/null
+    exec command $bin classify --shell=zsh --format=nul --first-kind=$kind --comments=$comments -- $1 2>/dev/null
   ) || return 1
   # The pid comes before ecdy starts, so it gets a fixed deadline of its own:
   # without it a timed-out classifier could not be stopped.
@@ -363,17 +376,18 @@ _ecdy_pre_redraw() {
   emulate -L zsh
   _ecdy_ind_buf=$BUFFER
   _ecdy_ind_cancel
-  local bin=${ECDY_BIN:-ecdy} REPLY
+  local bin=${ECDY_BIN:-ecdy} REPLY comments=false
   if [[ $CONTEXT != start || -n $PREBUFFER || -z ${BUFFER//[[:space:]]/} ]] ||
      ! whence -p -- $bin >/dev/null 2>&1; then
     _ecdy_ind_show ''
     return 0
   fi
   _ecdy_first_kind $BUFFER
+  [[ -o interactivecomments ]] && comments=true
   # As in _ecdy_classify: the subshell reports its pid and execs ecdy.
   exec {_ecdy_ind_fd}< <(
     print -rn -- "${sysparams[pid]:-}"$'\0'
-    exec command $bin classify --shell=zsh --format=nul --first-kind=$REPLY -- $BUFFER 2>/dev/null
+    exec command $bin classify --shell=zsh --format=nul --first-kind=$REPLY --comments=$comments -- $BUFFER 2>/dev/null
   ) || { _ecdy_ind_fd=''; return 0; }
   IFS= read -r -d '' -t 1 -u $_ecdy_ind_fd _ecdy_ind_pid
   zle -F -w $_ecdy_ind_fd _ecdy_ind_ready
@@ -456,7 +470,8 @@ _ecdy_doctor_probe() {
     "keymap=${${(z)$(bindkey -lL main)}[3]}"
     "accept-line=${widgets[accept-line]:-none}"
     "enter=${${(z)$(bindkey -M main '^M')}[2]}"
-    "alt-enter=${${(z)$(bindkey -M main '^[^M')}[2]}"
+    "force-key=$_ecdy_force_key"
+    "force=${${(z)$(bindkey -M main -- $_ecdy_force_key)}[2]}"
     "question=${${(z)$(bindkey -M main '?')}[2]}"
     "pre-redraw=${widgets[zle-line-pre-redraw]:-}"
     "indicator=${ECDY_INDICATOR:-rprompt}"
@@ -478,7 +493,7 @@ if (( ! ${+functions[ecdy]} && ! ${+aliases[ecdy]} )); then
   }
 fi
 
-# Alt+Enter: run the line as a command, skipping classification.
+# The force key: run the line as a command, skipping classification.
 _ecdy_force_command() {
   _ECDY_ORIG='' _ECDY_REWRITTEN=''
   _ecdy_accept
@@ -598,8 +613,9 @@ if [[ $widgets[accept-line] == user:* ]]; then
 fi
 zle -N accept-line _ecdy_accept_line
 zle -N ecdy-force-command _ecdy_force_command
-bindkey -M emacs '^[^M' ecdy-force-command
-bindkey -M viins '^[^M' ecdy-force-command
+typeset -g _ecdy_force_key=${ECDY_FORCE_KEY:-'^X^M'}
+bindkey -M emacs -- $_ecdy_force_key ecdy-force-command
+bindkey -M viins -- $_ecdy_force_key ecdy-force-command
 
 autoload -Uz add-zsh-hook add-zle-hook-widget
 add-zle-hook-widget line-finish _ecdy_line_finish

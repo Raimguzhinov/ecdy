@@ -512,6 +512,20 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   holds the screen with synchronized output (DEC mode 2026) from the rewrite to the end of
   `zle-line-finish` ([ADR 0006](adr/0006-ux.md)); terminals without the mode are unchanged.
   `TestSyncOutput`: red before the fix, green on zsh 5.8.1, 5.9 and 5.9.2.
+- **Multi-line pastes were misclassified** (branch `fix-multiline-paste`): a pasted block was
+  scored as one line, so a few ordinary commands added up to an Ask. A block that parses is now
+  scored per simple command; heredoc bodies, `for` word lists and command substitutions are not
+  scored, a dangerous command anywhere in the block is still seen.
+- **A leading comment line sent the block to the agent**: `# deps↵npm ci` had the first word `#`.
+  With INTERACTIVE_COMMENTS, the classifier and `_ecdy_first_kind` skip leading blank and comment
+  lines and do not score comments.
+- **Comments flag**: `ecdy classify --comments` (`Input.Comments`); the plugin passes it from
+  `[[ -o interactivecomments ]]` on Enter and for the indicator. Without it (the default) `#` is an
+  ordinary word, as zsh runs it: `rm build # remove all old stuff↵ls` stays Ask instead of
+  deleting `all`, `old` and `stuff`. Golden rows take `kind,comments` for the option.
+- **Force key is Ctrl+X Enter** (`^X^M`), configurable with `ECDY_FORCE_KEY` (bindkey notation,
+  read when the plugin loads); Alt+Enter is no longer bound (zsh inserts a newline with it).
+  `ecdy doctor` checks the configured key (probe `force-key=`/`force=`).
 
 ## Next: M8 — other shells
 

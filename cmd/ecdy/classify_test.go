@@ -35,6 +35,11 @@ func TestClassifyCmd(t *testing.T) {
 		{[]string{"--shell=zsh", "--first-kind=none", "--", "gti", "status"}, "ask\n"},
 		{[]string{"--first-kind=command", "--cwd", dir, "--", "rm", "-rf", "--", "the"}, "ask\n"},
 		{[]string{"--first-kind=none"}, "cmd\n"},
+		{[]string{"--first-kind=command", "--", "rm build # remove all old stuff\nls"}, "ask\n"},
+		{[]string{"--first-kind=command", "--comments=false", "--", "rm build # remove all old stuff\nls"}, "ask\n"},
+		{[]string{"--first-kind=command", "--comments", "--", "rm build # remove all old stuff\nls"}, "cmd\n"},
+		{[]string{"--cwd", dir, "--", "# list\nls"}, "prompt\n"},
+		{[]string{"--cwd", dir, "--comments", "--", "# list\nls"}, "cmd\n"},
 	}
 	for _, tt := range tests {
 		got, err := runClassify(t, tt.args...)

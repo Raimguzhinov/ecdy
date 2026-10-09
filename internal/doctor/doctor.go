@@ -89,7 +89,7 @@ func Check(e Env) []Result {
 	rs = append(rs,
 		Result{Name: "zsh", Status: OK, Detail: shell["zsh"] + ", keymap " + shell["keymap"]},
 		Result{Name: "plugin", Status: OK, Detail: "loaded in this shell"},
-		checkEnter(shell), checkAltEnter(shell), checkQuestion(shell), checkIndicator(shell))
+		checkEnter(shell), checkForceKey(shell), checkQuestion(shell), checkIndicator(shell))
 	if shell["atuin"] == "1" {
 		rs = append(rs, checkAtuin(e))
 	}
@@ -255,13 +255,16 @@ func checkEnter(s map[string]string) Result {
 	return r
 }
 
-func checkAltEnter(s map[string]string) Result {
-	if w := s["alt-enter"]; w != "ecdy-force-command" {
-		return Result{Name: "Alt+Enter", Status: Warn,
-			Detail: "runs " + w + ", not ecdy-force-command: a line cannot be forced to run as a command",
-			Hint:   "bind it after the other plugins: `bindkey '^[^M' ecdy-force-command`"}
+// checkForceKey: the key that runs a line without classification
+// (ECDY_FORCE_KEY, Ctrl+X Enter by default).
+func checkForceKey(s map[string]string) Result {
+	key := s["force-key"]
+	if w := s["force"]; w != "ecdy-force-command" {
+		return Result{Name: "force key", Status: Warn,
+			Detail: key + " runs " + w + ", not ecdy-force-command: a line cannot be forced to run as a command",
+			Hint:   "bind it after the other plugins: `bindkey '" + key + "' ecdy-force-command`, or pick another key with ECDY_FORCE_KEY"}
 	}
-	return Result{Name: "Alt+Enter", Detail: "runs the line as a command"}
+	return Result{Name: "force key", Detail: key + " runs the line as a command"}
 }
 
 // checkQuestion: the ? prefix is typed as a character.

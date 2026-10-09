@@ -40,6 +40,12 @@ func TestResultDetails(t *testing.T) {
 				Correction: "sudo systemctl restart nginx"},
 		},
 		{
+			name: "correction after a leading comment line",
+			in:   Input{Line: "# push it\ngti push origin", FirstKind: KindNone, Comments: true},
+			want: Result{Verdict: Ask, Prompt: "# push it\ngti push origin", Suggestion: "git",
+				Correction: "# push it\ngit push origin"},
+		},
+		{
 			name: "extra commands are typo candidates",
 			in:   Input{Line: "zelij attach", FirstKind: KindNone, Config: Config{ExtraCommands: []string{"zellij"}}},
 			want: Result{Verdict: Ask, Prompt: "zelij attach", Suggestion: "zellij", Correction: "zellij attach"},
@@ -130,10 +136,27 @@ func TestFirstWord(t *testing.T) {
 		"(cd x && make)":           "",
 		"  time make build":        "make",
 		"arr=(a b c) cmd":          "cmd",
+		"\n\nls":                   "ls",
 	}
 	for line, want := range tests {
-		if got := FirstWord(line); got != want {
-			t.Errorf("FirstWord(%q) = %q, want %q", line, got, want)
+		for _, comments := range []bool{false, true} {
+			if got := FirstWord(line, comments); got != want {
+				t.Errorf("FirstWord(%q, %t) = %q, want %q", line, comments, got, want)
+			}
+		}
+	}
+	withComments := []struct{ line, off, on string }{
+		{"# install\n\n  npm ci", "#", "npm"},
+		{"# only\n# comments", "#", ""},
+		{"#!/bin/sh\nls", "#!/bin/sh", "ls"},
+		{"ls # list", "ls", "ls"},
+	}
+	for _, c := range withComments {
+		if got := FirstWord(c.line, false); got != c.off {
+			t.Errorf("FirstWord(%q, false) = %q, want %q", c.line, got, c.off)
+		}
+		if got := FirstWord(c.line, true); got != c.on {
+			t.Errorf("FirstWord(%q, true) = %q, want %q", c.line, got, c.on)
 		}
 	}
 }

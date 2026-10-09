@@ -101,7 +101,7 @@ _ecdy_accept_line() {
   zle .accept-line
 }
 zle -N accept-line _ecdy_accept_line
-bindkey '^[^M' _ecdy_force_command   # Alt+Enter — run as a command, skipping classification
+bindkey '^X^M' _ecdy_force_command   # Ctrl+X Enter (ECDY_FORCE_KEY) — run as a command, skipping classification
 ```
 
 `_ecdy_first_kind` determines the kind of the first word via `whence -w`, after skipping assignments (`FOO=1`)
@@ -125,7 +125,7 @@ cwd (to check whether paths exist), config.
 ### Rule cascade (order matters, first match wins)
 
 1. **Empty line / whitespace only** → `Cmd` (pass-through).
-2. **Explicit override**: a `?` prefix at the start of the line → `Prompt` (the prefix is stripped). Alt+Enter → `Cmd`, bypassing the classifier.
+2. **Explicit override**: a `?` prefix at the start of the line → `Prompt` (the prefix is stripped). Ctrl+X Enter (`ECDY_FORCE_KEY`) → `Cmd`, bypassing the classifier.
    Prefixes are configurable.
 3. **First word is unknown** (`FirstKind=none`, not a path like `./x` or `/x`, not an assignment):
    - looks like a typo of a known command (Damerau–Levenshtein ≤ 1, and the rest looks like arguments, e.g. `gti status`)
