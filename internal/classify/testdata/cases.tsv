@@ -3,7 +3,10 @@
 # first_kind is what zsh's `whence -w` prints for the first command word.
 # The test runs in a fake directory with these entries:
 #   configs  tmp/  main.go  go.mod  README.md  Makefile  docs/  Загрузки/  notes  a
-# Lines starting with '#' and blank lines are ignored.
+# Lines starting with '#' and blank lines are ignored. In the input, ↵ stands for a newline;
+# an input that starts with a comment gets a leading space (Classify trims it).
+# first_kind,comments runs the case with Input.Comments (zsh's INTERACTIVE_COMMENTS) set;
+# without it '#' is an ordinary word, as in zsh by default.
 
 # --- Rule 1: empty input ---
 	none	cmd	empty line
@@ -352,3 +355,51 @@ git commit -m 'unterminated	command	cmd	unterminated quote in a command
 echo )	builtin	cmd	a stray parenthesis alone is only a weak signal
 echo hello )	builtin	cmd	weak
 echo it doesn't work	builtin	ask	contraction
+
+# --- Multi-line buffers (pasted blocks): signals per simple command ---
+git add -A && git commit -m wip↵git push origin HEAD	command	cmd	word-like arguments are counted per command
+apt update↵# then install all the packages↵apt install -y git	command,comments	cmd	a comment line is not scored
+cat > /etc/x.conf <<EOF↵# all the settings for the server↵listen 80↵EOF	command,comments	cmd	a heredoc body is not scored
+set -euo pipefail↵for host in a b c; do↵  ssh "$host" uptime↵done	builtin	cmd	a for word list is not scored
+set -euo pipefail↵for host in a b c; do↵  ssh "$host" uptime↵done	command	cmd	same with the kind from the bug report
+ # install deps↵npm ci	none,comments	cmd	a leading comment line is skipped; npm is a known name
+ # install deps↵npm ci	command,comments	cmd	a leading comment line is skipped
+ # setup↵↵git status	command,comments	cmd	leading comment and blank lines are skipped
+ # only a comment↵# and another one	none,comments	cmd	nothing but comments
+ # why is the build failing?	none,comments	cmd	a single comment line is a no-op
+git log --oneline |↵  grep fix |↵  head -n 5	command	cmd	pipeline across lines
+docker run --rm \↵  -v "$PWD:/src" \↵  -w /src golang go build ./...	command	cmd	backslash line continuations
+if [ -f go.mod ]; then↵  go test ./...↵else↵  echo no module here↵fi	reserved	cmd	if/else/fi block
+case "$1" in↵  start) systemctl start nginx ;;↵  stop) systemctl stop nginx ;;↵esac	reserved	cmd	case block
+function mkcd {↵  mkdir -p "$1" && cd "$1"↵}	reserved	cmd	function definition
+cat <<'EOF' > notes.md↵Привет, это заметки про сервер и все его настройки↵EOF	command	cmd	a heredoc body in Russian is not scored
+make build  # build all the things↵make test	command,comments	cmd	a comment at the end of a line is not scored
+kubectl get pods -A |↵  grep -v Running↵kubectl get nodes	command	cmd	several short commands
+mkdir -p build↵cd build↵cmake ..↵make all↵make install	command	cmd	many commands with a few words each
+rm all temp files↵except the configs please	command	ask	multi-line natural language after rm
+rm all temp files↵except the configs please	alias	ask	same with rm aliased
+cd tmp↵rm everything except configs	command	ask	dangerous second command with stop words
+git status↵why is it failing	command	ask	second line is a question
+ls -la↵what are all these files?	command	ask	second line is a question with a question mark
+explain this error↵and suggest a fix	none	prompt	multi-line prompt with an unknown first word
+echo it doesn't work↵ls	builtin	ask	does not parse: token-based scoring as before
+ # clean up↵rm the old logs please	command,comments	ask	a leading comment does not hide a dangerous prompt
+cd tmp↵for f in *; do rm the $f; done	builtin	ask	a dangerous command inside a loop is still seen
+ls -la↵rm -rf build	command	cmd	dangerous command without signals
+sudo apt update↵sudo apt install -y the package please	command	ask	stop words in one command of the block
+
+# --- Comments: '#' starts one only with INTERACTIVE_COMMENTS ---
+rm build # remove all old stuff↵ls	command	ask	without the option the words after '#' are arguments to rm
+rm build # remove all old stuff↵ls	command,comments	cmd	with it they are a comment
+rm build # remove all old stuff	command	ask	single line: '#' is a word
+rm build # remove all old stuff	command,comments	ask	single line: scored as a whole either way
+apt update↵# then install all the packages↵apt install -y git	command	ask	the comment line is a command '#' with arguments
+cat > /etc/x.conf <<EOF↵# all the settings for the server↵listen 80↵EOF	command	ask	a '#' word falls back to scoring the whole block
+ # install deps↵npm ci	none	prompt	'#' is the first word and is not a command
+ # install deps↵npm ci	command	cmd	no comment skipping
+ # setup↵↵git status	command	cmd	no comment skipping
+ # only a comment↵# and another one	none	prompt	'#' is not a command
+ # why is the build failing?	none	prompt	'#' is not a command
+make build  # build all the things↵make test	command	ask	the words after '#' are arguments to make
+ # clean up↵rm the old logs please	command	ask	dangerous either way
+ls -la↵echo ${#PATH}↵echo $#	command	cmd	'#' inside an expansion is not a comment

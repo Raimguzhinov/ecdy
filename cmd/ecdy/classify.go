@@ -22,6 +22,7 @@ func newClassifyCmd() *cobra.Command {
 		cwd       string
 		asJSON    bool
 		format    string
+		comments  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "classify [flags] -- LINE",
@@ -30,7 +31,9 @@ func newClassifyCmd() *cobra.Command {
 			"\"prompt\" (send it to the agent) or \"ask\" (let the user choose).\n\n" +
 			"The shell plugin passes --first-kind from `whence -w`, since only the shell\n" +
 			"knows its aliases and functions. Without it (\"auto\"), ecdy guesses from\n" +
-			"a list of zsh builtins and reserved words and from $PATH.",
+			"a list of zsh builtins and reserved words and from $PATH.\n\n" +
+			"With --comments, '#' at the start of a word starts a comment, as with zsh's\n" +
+			"INTERACTIVE_COMMENTS option; the plugin passes it when the option is set.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			switch format {
@@ -47,7 +50,7 @@ func newClassifyCmd() *cobra.Command {
 			line := strings.Join(args, " ")
 			var kind classify.Kind
 			if firstKind == "auto" {
-				kind = guessKind(classify.FirstWord(line))
+				kind = guessKind(classify.FirstWord(line, comments))
 			} else {
 				k, err := classify.ParseKind(firstKind)
 				if err != nil {
@@ -66,6 +69,7 @@ func newClassifyCmd() *cobra.Command {
 				Line:      line,
 				FirstKind: kind,
 				FS:        os.DirFS(cwd).(fs.StatFS),
+				Comments:  comments,
 			})
 			return writeResult(cmd.OutOrStdout(), format, res)
 		},
@@ -75,6 +79,7 @@ func newClassifyCmd() *cobra.Command {
 	f.StringVar(&firstKind, "first-kind", "auto",
 		"kind of the first word as printed by `whence -w`: alias, function, builtin, command, reserved, hashed, none, or auto")
 	f.StringVar(&cwd, "cwd", "", "directory used to tell file names from words (default: current directory)")
+	f.BoolVar(&comments, "comments", false, "treat '#' at the start of a word as a comment (zsh's INTERACTIVE_COMMENTS)")
 	f.BoolVar(&asJSON, "json", false, "same as --format=json")
 	f.StringVar(&format, "format", "text",
 		"output format: text (the verdict), json (verdict, reason, signals), or nul (for the shell plugin)")

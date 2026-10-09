@@ -33,7 +33,7 @@ func newDoctorCmd() *cobra.Command {
 		Long: "doctor checks the ecdy binary the plugin runs, the config, that every\n" +
 			"agent's command is on $PATH, zsh, and, when typed at the prompt of a zsh\n" +
 			"with the plugin, the keys and widgets other plugins may have taken\n" +
-			"(Enter, Alt+Enter, the ? prefix, the indicator, atuin, fzf-tab).\n\n" +
+			"(Enter, the force key, the ? prefix, the indicator, atuin, fzf-tab).\n\n" +
 			"With --agents it also starts each agent (initialize and session/new,\n" +
 			"no prompt) to see that it runs and that you are logged in. That starts\n" +
 			"the agents' processes, which may use the network (npx downloads them).\n\n" +

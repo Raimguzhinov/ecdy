@@ -113,8 +113,12 @@ type Input struct {
 	FirstKind Kind
 	// FS is rooted at the current directory and is used to tell file
 	// names from words. nil means "no file exists".
-	FS     fs.StatFS
-	Config Config
+	FS fs.StatFS
+	// Comments is set when the shell treats '#' at the start of a word as a
+	// comment (zsh's INTERACTIVE_COMMENTS). Otherwise '#' is a word like any
+	// other, and the words after it are arguments.
+	Comments bool
+	Config   Config
 }
 
 // Result is the verdict plus everything the shell integration and --json
@@ -173,9 +177,17 @@ func Classify(in Input) Result {
 		}
 	}
 
-	toks := lex(line)
+	off := 0
+	if in.Comments {
+		off = skipComments(line)
+	}
+	body := line[off:]
+	if body == "" {
+		return Result{Verdict: Cmd, Reason: "only comments"}
+	}
+	toks := lex(body)
 	sh := analyze(toks)
-	sc := newScorer(line, toks, sh, in.FS)
+	sc := newScorer(body, toks, sh, in.FS, in.Comments)
 	score, countOnly, signals := sc.score()
 
 	first := -1
@@ -205,7 +217,7 @@ func Classify(in Input) Result {
 					Reason:     fmt.Sprintf("unknown command %q looks like a typo of %q", word, sugg),
 					Prompt:     line,
 					Suggestion: sugg,
-					Correction: line[:t.start] + sugg + line[t.start+len(word):],
+					Correction: line[:off+t.start] + sugg + line[off+t.start+len(word):],
 					Score:      score, Signals: signals,
 				}
 			}
@@ -223,7 +235,7 @@ func Classify(in Input) Result {
 	if in.FirstKind == KindReserved && sc.parseOK() {
 		return Result{Verdict: Cmd, Reason: "valid shell syntax", Score: score, Signals: signals}
 	}
-	dangerous := isDangerous(toks, sh)
+	dangerous := sc.dangerous()
 	res := Result{Score: score, Signals: signals, Dangerous: dangerous}
 	switch {
 	case dangerous && score-countOnly >= dangerThreshold:
@@ -356,13 +368,36 @@ func cmdName(t token) string {
 }
 
 // FirstWord returns the command word whose kind Input.FirstKind describes:
-// the first word after assignments and precommand modifiers, with quotes
-// removed. It is empty if the line has no command word.
-func FirstWord(line string) string {
-	toks := lex(strings.TrimSpace(line))
+// the first word after assignments and precommand modifiers (and leading
+// comment lines if comments is set, see Input.Comments), with quotes removed.
+// It is empty if the line has no command word.
+func FirstWord(line string, comments bool) string {
+	line = strings.TrimSpace(line)
+	if comments {
+		line = line[skipComments(line):]
+	}
+	toks := lex(line)
 	sh := analyze(toks)
 	if len(sh.cmdWords) == 0 || toks[0].op {
 		return ""
 	}
 	return unquote(toks[sh.cmdWords[0]].text)
+}
+
+// skipComments returns the offset of the first line of s that is neither
+// blank nor a comment, or len(s) if there is none.
+func skipComments(s string) int {
+	off := 0
+	for {
+		rest := strings.TrimLeft(s[off:], " \t\r\n")
+		off = len(s) - len(rest)
+		if !strings.HasPrefix(rest, "#") {
+			return off
+		}
+		nl := strings.IndexByte(rest, '\n')
+		if nl < 0 {
+			return len(s)
+		}
+		off += nl + 1
+	}
 }

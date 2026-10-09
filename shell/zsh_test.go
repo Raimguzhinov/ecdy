@@ -88,7 +88,7 @@ func run(m *testing.M) int {
 // Keys.
 const (
 	enter    = "\r"
-	altEnter = "\x1b\r"
+	forceKey = "\x18\r" // Ctrl+X Enter
 	esc      = "\x1b"
 	ctrlU    = "\x15"
 	ctrlT    = "\x14"
@@ -269,15 +269,29 @@ func testSyncOutput(t *testing.T, zsh string) {
 	z.ExpectPrompt()
 }
 
-// TestForceCommand: Alt+Enter runs the line as a command, skipping the
-// classifier.
+// TestForceCommand: Ctrl+X Enter, or the key in ECDY_FORCE_KEY, runs the
+// line as a command, skipping the classifier.
 func TestForceCommand(t *testing.T) { forEachZsh(t, testForceCommand) }
 
 func testForceCommand(t *testing.T, zsh string) {
 	z := startZsh(t, zsh, zshOpts{})
-	z.Send("explain this error" + altEnter)
+	z.Send("explain this error" + forceKey)
 	z.Expect("command not found: explain")
 	z.ExpectPrompt()
+	// Alt+Enter is zsh's own again: in emacs mode it inserts a newline.
+	z.Send("print -r -- one-$((6*7))\x1b\rprint -r -- two-$((6*7))" + enter)
+	z.Expect("one-42")
+	z.Expect("two-42")
+	z.ExpectPrompt()
+
+	for _, keymap := range []string{"emacs", "viins"} {
+		t.Run(keymap, func(t *testing.T) {
+			z := startZsh(t, zsh, zshOpts{rc: "bindkey -" + map[string]string{"emacs": "e", "viins": "v"}[keymap] + "; ECDY_FORCE_KEY='^Xf'"})
+			z.Send("explain this error\x18f")
+			z.Expect("command not found: explain")
+			z.ExpectPrompt()
+		})
+	}
 }
 
 func TestAskDialog(t *testing.T) { forEachZsh(t, testAskDialog) }
@@ -309,7 +323,7 @@ func testAskDialog(t *testing.T, zsh string) {
 	z.Send(dangerous + enter)
 	z.Expect("destructive command")
 	z.Send("e")
-	z.Send("; print -r -- edited-$((6*7))" + altEnter)
+	z.Send("; print -r -- edited-$((6*7))" + forceKey)
 	z.Expect("edited-42")
 	z.ExpectPrompt()
 	exists(false)
@@ -472,7 +486,7 @@ func testCoexistence(t *testing.T, zsh string) {
 			z.Send("f")
 			z.Expect("typo-42")
 			z.ExpectPrompt()
-			z.Send("explain this error" + altEnter)
+			z.Send("explain this error" + forceKey)
 			z.Expect("command not found: explain")
 			z.ExpectPrompt()
 			// Both plugins are still active.
@@ -530,31 +544,48 @@ func shellQuote(s string) string {
 func TestFirstKind(t *testing.T) { forEachZsh(t, testFirstKind) }
 
 func testFirstKind(t *testing.T, zsh string) {
-	cases := []struct{ line, word, kind string }{
-		{"", "", "none"},
-		{"ls -la", "ls", "command"},
-		{"ll", "ll", "alias"},
-		{"myfunc arg", "myfunc", "function"},
-		{"cd /tmp", "cd", "builtin"},
-		{"if true; then :; fi", "if", "reserved"},
-		{"explain this error", "explain", "none"},
-		{"FOO=1 BAR+=2 ls", "ls", "command"},
-		{"sudo -u root ls", "ls", "command"},
-		{"sudo -E explain", "explain", "none"},
-		{"env -i FOO=1 cd", "cd", "builtin"},
-		{"noglob command exec -a name ls", "ls", "command"},
-		{"time myfunc", "myfunc", "function"},
-		{"FOO=1 > out ls", "ls", "command"},
-		{"FOO=1", "", "none"},
-		{"'ls' -la", "ls", "command"},
-		{"; ls", "", "none"},
-		{"./nope", "./nope", "none"},
-		{"/bin/sh -c true", "/bin/sh", "command"},
+	cases := []struct {
+		line, word, kind string
+		comments         bool // setopt interactivecomments
+	}{
+		{"", "", "none", false},
+		{"ls -la", "ls", "command", false},
+		{"ll", "ll", "alias", false},
+		{"myfunc arg", "myfunc", "function", false},
+		{"cd /tmp", "cd", "builtin", false},
+		{"if true; then :; fi", "if", "reserved", false},
+		{"explain this error", "explain", "none", false},
+		{"FOO=1 BAR+=2 ls", "ls", "command", false},
+		{"sudo -u root ls", "ls", "command", false},
+		{"sudo -E explain", "explain", "none", false},
+		{"env -i FOO=1 cd", "cd", "builtin", false},
+		{"noglob command exec -a name ls", "ls", "command", false},
+		{"time myfunc", "myfunc", "function", false},
+		{"FOO=1 > out ls", "ls", "command", false},
+		{"FOO=1", "", "none", false},
+		{"'ls' -la", "ls", "command", false},
+		{"; ls", "", "none", false},
+		{"./nope", "./nope", "none", false},
+		{"/bin/sh -c true", "/bin/sh", "command", false},
+		{"\n\n  ls", "ls", "command", false},
+		{"\n\n  ls", "ls", "command", true},
+		{"# deps\nls -la", "#", "none", false},
+		{"# deps\nls -la", "ls", "command", true},
+		{"# a\n\n  # b\nFOO=1 cd # x", "cd", "builtin", true},
+		{"#!/bin/sh\nmyfunc", "myfunc", "function", true},
+		{"# only\n# comments", "", "none", true},
+		{"ls # list", "ls", "command", false},
+		{"ls # list", "ls", "command", true},
+		{"# x\n; ls", "", "none", true},
 	}
 	var script strings.Builder
 	script.WriteString("alias ll='ls -l'\nmyfunc() { :; }\nsource " + shellQuote(sourceFile(t)) + "\n")
 	for _, c := range cases {
-		fmt.Fprintf(&script, "_ecdy_first_kind %s; print -r -- $REPLY\n", shellQuote(c.line))
+		opt := "unsetopt"
+		if c.comments {
+			opt = "setopt"
+		}
+		fmt.Fprintf(&script, "%s interactivecomments; _ecdy_first_kind %s; print -r -- $REPLY\n", opt, shellQuote(c.line))
 	}
 	cmd := exec.Command(zsh, "-f", "-i", "-c", script.String())
 	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin:" + filepath.Dir(zsh)}
@@ -568,10 +599,10 @@ func testFirstKind(t *testing.T, zsh string) {
 	}
 	for i, c := range cases {
 		if got[i] != c.kind {
-			t.Errorf("_ecdy_first_kind %q = %s, want %s", c.line, got[i], c.kind)
+			t.Errorf("_ecdy_first_kind %q (comments=%t) = %s, want %s", c.line, c.comments, got[i], c.kind)
 		}
-		if w := classify.FirstWord(c.line); w != c.word {
-			t.Errorf("classify.FirstWord(%q) = %q, want %q", c.line, w, c.word)
+		if w := classify.FirstWord(c.line, c.comments); w != c.word {
+			t.Errorf("classify.FirstWord(%q, %t) = %q, want %q", c.line, c.comments, w, c.word)
 		}
 	}
 }

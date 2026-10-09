@@ -17,7 +17,7 @@ import (
 
 // healthy is a probe of a zsh with the plugin and nothing in its way.
 const healthy = "zsh=5.9\nbin=\nkeymap=emacs\naccept-line=user:_ecdy_accept_line\nenter=accept-line\n" +
-	"alt-enter=ecdy-force-command\nquestion=self-insert\npre-redraw=user:azhw:zle-line-pre-redraw\n" +
+	"force-key=^X^M\nforce=ecdy-force-command\nquestion=self-insert\npre-redraw=user:azhw:zle-line-pre-redraw\n" +
 	"indicator=rprompt\natuin=0\nfzf-tab-accept-line="
 
 func env() Env {
@@ -148,7 +148,9 @@ func TestCheck(t *testing.T) {
 			e.Shell = probe("accept-line", "user:_zsh_autosuggest_bound_1_accept-line")
 		}, "Enter", OK, "_zsh_autosuggest_bound_1_accept-line"},
 		{"Enter bound elsewhere", func(e *Env) { e.Shell = probe("enter", "my-widget") }, "Enter", Fail, "my-widget"},
-		{"Alt+Enter bound elsewhere", func(e *Env) { e.Shell = probe("alt-enter", "undefined-key") }, "Alt+Enter", Warn, "undefined-key"},
+		{"force key bound elsewhere", func(e *Env) { e.Shell = probe("force", "undefined-key") }, "force key", Warn, "^X^M runs undefined-key"},
+		{"force key hint names the key", func(e *Env) { e.Shell = probe("force", "undefined-key") }, "force key", Warn, "bindkey '^X^M' ecdy-force-command"},
+		{"custom force key", func(e *Env) { e.Shell = probe("force-key", "^Xf") }, "force key", OK, "^Xf runs the line as a command"},
 		{"atuin AI takes ?", func(e *Env) { e.Shell = probe("question", "self-atuin-ai-question-mark") }, "? prefix", Warn, "--disable-ai"},
 		{"? bound elsewhere", func(e *Env) { e.Shell = probe("question", "my-help") }, "? prefix", Warn, "my-help"},
 		{"no pre-redraw hook", func(e *Env) { e.Shell = probe("pre-redraw", "") }, "indicator", Warn, "zle-line-pre-redraw"},

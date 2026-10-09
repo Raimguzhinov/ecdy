@@ -63,15 +63,19 @@ On Enter, ecdy classifies the line:
   `⏎ agent · r run · e edit · Esc cancel` (plus `f fix` when the first word looks like a typo,
   e.g. `gti status`). Enter sends the line to the agent.
 
-Overrides: start the line with `?` to force a prompt; press **Alt+Enter** to run it as a command
-without classification.
+Overrides: start the line with `?` to force a prompt; press **Ctrl+X Enter** to run it as a command
+without classification (another key: `ECDY_FORCE_KEY`).
+
+A multi-line paste is scored command by command. With `setopt interactive_comments`, `#` comments
+are not scored and leading comment lines are skipped; without it, `#` is an ordinary word, as zsh
+runs it.
 
 **Indicator.** While you type, the right prompt shows what Enter will do: `→ agent` for a prompt,
 `? ask` when a dialog will ask, nothing for a command. The classifier runs in the background on every
 change of the line, so typing never waits for it; Enter still classifies the line itself.
 
 The plugin replaces the `accept-line` widget (calling the previous one, if another plugin wrapped
-it), binds Alt+Enter (`^[^M`) in the `emacs` and `viins` keymaps, adds `zle-line-init`,
+it), binds the force key (`^X^M` by default) in the `emacs` and `viins` keymaps, adds `zle-line-init`,
 `zle-line-pre-redraw` and `zle-line-finish` hooks (with `add-zle-hook-widget`) and defines a
 function `ecdy` in front of the binary, so that `ecdy doctor` can check the shell. Settings:
 
@@ -79,6 +83,7 @@ function `ecdy` in front of the binary, so that `ecdy doctor` can check the shel
 |---|---|---|
 | `ECDY_BIN` | `ecdy` | the ecdy executable |
 | `ECDY_CLASSIFY_TIMEOUT` | `0.5` | seconds to wait for the classifier |
+| `ECDY_FORCE_KEY` | `^X^M` | the key that runs the line as a command, in `bindkey` notation (Ctrl+X Enter) |
 | `ECDY_INDICATOR` | `rprompt` | `rprompt`: shown in front of `RPROMPT`; `var`: only set `$ECDY_VERDICT` (`cmd`, `prompt`, `ask` or empty) and redraw, for a theme that shows it itself; `off`: no indicator, no background classifier |
 | `ECDY_INDICATOR_PROMPT` | `%F{magenta}→ agent%f` | indicator for a prompt (prompt escapes allowed) |
 | `ECDY_INDICATOR_ASK` | `%F{yellow}? ask%f` | indicator when the dialog will ask |
@@ -88,7 +93,7 @@ If `ecdy` is missing, crashes, prints something unexpected or misses the deadlin
 exactly like in vanilla zsh, and no indicator is shown.
 
 **`ecdy doctor`** checks that everything is in place: the `ecdy` the plugin runs, the config, each
-agent's command on `$PATH`, zsh, and, typed at the prompt, the shell itself: that Enter, Alt+Enter
+agent's command on `$PATH`, zsh, and, typed at the prompt, the shell itself: that Enter, the force key
 and `?` still reach ecdy after the other plugins loaded. `ecdy doctor --agents` also starts every
 agent (no prompt is sent) to see that it runs and that you are logged in; that may take a while the
 first time, as npx downloads the agents.

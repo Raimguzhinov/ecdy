@@ -19,21 +19,24 @@ func FuzzClassify(f *testing.F) {
 		if k < 0 {
 			k = -k
 		}
-		res := Classify(Input{Line: line, FirstKind: k, FS: fsys})
-		switch res.Verdict {
-		case Cmd, Prompt, Ask:
-		default:
-			t.Fatalf("invalid verdict %d", res.Verdict)
+		for _, comments := range []bool{false, true} {
+			res := Classify(Input{Line: line, FirstKind: k, Comments: comments, FS: fsys})
+			switch res.Verdict {
+			case Cmd, Prompt, Ask:
+			default:
+				t.Fatalf("invalid verdict %d", res.Verdict)
+			}
+			if res.Reason == "" {
+				t.Fatal("empty reason")
+			}
+			if res.Verdict == Prompt && k != KindNone && !strings.HasPrefix(res.Reason, "explicit") {
+				t.Fatalf("known first word (%s) classified as prompt: %q", k, line)
+			}
+			if utf8.ValidString(line) && res.Correction != "" && !utf8.ValidString(res.Correction) {
+				t.Fatalf("invalid UTF-8 correction %q", res.Correction)
+			}
 		}
-		if res.Reason == "" {
-			t.Fatal("empty reason")
-		}
-		if res.Verdict == Prompt && k != KindNone && !strings.HasPrefix(res.Reason, "explicit") {
-			t.Fatalf("known first word (%s) classified as prompt: %q", k, line)
-		}
-		if utf8.ValidString(line) && res.Correction != "" && !utf8.ValidString(res.Correction) {
-			t.Fatalf("invalid UTF-8 correction %q", res.Correction)
-		}
-		_ = FirstWord(line)
+		_ = FirstWord(line, false)
+		_ = FirstWord(line, true)
 	})
 }

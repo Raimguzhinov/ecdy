@@ -20,11 +20,13 @@ func testDoctor(t *testing.T, zsh string) {
 		wants []string
 	}{
 		{"healthy", zshOpts{}, []string{
-			"✓ plugin: loaded in this shell", "✓ Enter: classified by ecdy", "✓ Alt+Enter: runs the line as a command",
+			"✓ plugin: loaded in this shell", "✓ Enter: classified by ecdy", "✓ force key: ^X^M runs the line as a command",
 			"✓ ? prefix: sends the line to the agent", "✓ indicator: shown as rprompt",
 		}},
 		{"accept-line reset", zshOpts{after: "zle -A .accept-line accept-line"}, []string{"✗ Enter: accept-line is builtin"}},
-		{"Alt+Enter taken", zshOpts{after: "bindkey '^[^M' undefined-key"}, []string{"! Alt+Enter: runs undefined-key"}},
+		{"force key taken", zshOpts{after: "bindkey '^X^M' undefined-key"}, []string{"! force key: ^X^M runs undefined-key"}},
+		{"custom force key", zshOpts{rc: "ECDY_FORCE_KEY='^Xf'"}, []string{"✓ force key: ^Xf runs the line as a command"}},
+		{"custom force key taken", zshOpts{rc: "ECDY_FORCE_KEY='^Xf'", after: "bindkey '^Xf' undefined-key"}, []string{"! force key: ^Xf runs undefined-key"}},
 		{"atuin with AI", zshOpts{after: `eval "$(atuin init zsh)"`}, []string{
 			"! ? prefix: ? on an empty line starts atuin's AI", "--disable-ai",
 			"! atuin: atuin records every prompt as `ecdy ask -- '…'`",

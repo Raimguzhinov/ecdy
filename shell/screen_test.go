@@ -196,6 +196,16 @@ func testIndicator(t *testing.T, zsh string) {
 		}
 		s.waitRow("% R")
 	})
+	t.Run("comments", func(t *testing.T) {
+		// Whether '#' starts a comment is this shell's INTERACTIVE_COMMENTS.
+		const line = "# why is it failing"
+		s := startScreen(t, zsh, zshOpts{rc: "RPS1=R", after: "ECDY_INDICATOR_CMD='[cmd]'"}, 80)
+		s.typeText(line)
+		s.waitRow("% " + line + " → agent R")
+		s = startScreen(t, zsh, zshOpts{rc: "RPS1=R; setopt interactivecomments", after: "ECDY_INDICATOR_CMD='[cmd]'"}, 80)
+		s.typeText(line)
+		s.waitRow("% " + line + " [cmd] R")
+	})
 	t.Run("custom", func(t *testing.T) {
 		s := startScreen(t, zsh, zshOpts{rc: "RPS1=R", after: "ECDY_INDICATOR_CMD='[cmd]' ECDY_INDICATOR_PROMPT='[ai]'"}, 80)
 		s.typeText("explain")

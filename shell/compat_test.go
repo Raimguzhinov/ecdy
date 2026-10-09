@@ -84,8 +84,8 @@ func testCompat(t *testing.T, zsh string) {
 				z.Expect("destructive command")
 				z.Send(esc)
 				z.ExpectPrompt()
-				// Alt+Enter runs the line as a command.
-				z.Send("explain this error" + altEnter)
+				// The force key runs the line as a command.
+				z.Send("explain this error" + forceKey)
 				z.Expect("command not found: explain")
 				z.ExpectPrompt()
 				p.check(z)

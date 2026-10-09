@@ -2,6 +2,7 @@ package classify
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -29,6 +30,7 @@ type goldenCase struct {
 	line      int
 	input     string
 	firstKind Kind
+	comments  bool
 	want      Verdict
 	comment   string
 }
@@ -50,7 +52,8 @@ func loadGolden(tb testing.TB) []goldenCase {
 		if len(cols) < 3 || len(cols) > 4 {
 			tb.Fatalf("cases.tsv:%d: want 3 or 4 tab-separated columns, got %d", n, len(cols))
 		}
-		kind, err := ParseKind(cols[1])
+		kindName, comments := strings.CutSuffix(cols[1], ",comments")
+		kind, err := ParseKind(kindName)
 		if err != nil {
 			tb.Fatalf("cases.tsv:%d: %v", n, err)
 		}
@@ -58,7 +61,7 @@ func loadGolden(tb testing.TB) []goldenCase {
 		if err != nil {
 			tb.Fatalf("cases.tsv:%d: %v", n, err)
 		}
-		c := goldenCase{line: n, input: cols[0], firstKind: kind, want: want}
+		c := goldenCase{line: n, input: strings.ReplaceAll(cols[0], "↵", "\n"), firstKind: kind, comments: comments, want: want}
 		if len(cols) == 4 {
 			c.comment = cols[3]
 		}
@@ -74,10 +77,26 @@ func TestGolden(t *testing.T) {
 	}
 	fsys := goldenFS()
 	for _, c := range cases {
-		got := Classify(Input{Line: c.input, FirstKind: c.firstKind, FS: fsys})
+		got := Classify(Input{Line: c.input, FirstKind: c.firstKind, Comments: c.comments, FS: fsys})
 		if got.Verdict != c.want {
-			t.Errorf("cases.tsv:%d: Classify(%q, %s) = %s, want %s (%s)\n\treason: %s, score %d, signals %q",
-				c.line, c.input, c.firstKind, got.Verdict, c.want, c.comment, got.Reason, got.Score, got.Signals)
+			t.Errorf("cases.tsv:%d: Classify(%q, %s, comments=%t) = %s, want %s (%s)\n\treason: %s, score %d, signals %q",
+				c.line, c.input, c.firstKind, c.comments, got.Verdict, c.want, c.comment, got.Reason, got.Score, got.Signals)
+		}
+	}
+}
+
+// TestCommentsOnlyAffectComments: Input.Comments changes nothing for a line
+// without '#'.
+func TestCommentsOnlyAffectComments(t *testing.T) {
+	fsys := goldenFS()
+	for _, c := range loadGolden(t) {
+		if strings.Contains(c.input, "#") {
+			continue
+		}
+		off := Classify(Input{Line: c.input, FirstKind: c.firstKind, FS: fsys})
+		on := Classify(Input{Line: c.input, FirstKind: c.firstKind, Comments: true, FS: fsys})
+		if !reflect.DeepEqual(off, on) {
+			t.Errorf("cases.tsv:%d: Classify(%q) with comments = %+v, without = %+v", c.line, c.input, on, off)
 		}
 	}
 }
