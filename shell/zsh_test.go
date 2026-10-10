@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Raimguzhinov/ecdy/internal/classify"
 	"github.com/Raimguzhinov/ecdy/internal/testutil"
@@ -295,6 +296,34 @@ func testForceCommand(t *testing.T, zsh string) {
 			z.ExpectPrompt()
 		})
 	}
+}
+
+// TestForcePrefix: the force key's first key is bound to ecdy only where
+// nothing uses it, and only when the force key has more than one key.
+func TestForcePrefix(t *testing.T) { forEachZsh(t, testForcePrefix) }
+
+func testForcePrefix(t *testing.T, zsh string) {
+	for _, tt := range []struct{ name, rc, key, want string }{
+		{"default", "", "^X", `"^X" ecdy-force-prefix`},
+		{"taken", "zle -N mine; bindkey -M emacs '^X' mine", "^X", `"^X" mine`},
+		{"single", "ECDY_FORCE_KEY='^Z'", "^Z", `"^Z" ecdy-force-command`},
+		{"escapes", `ECDY_FORCE_KEY='\C-xq'`, "^X", `"^X" ecdy-force-prefix`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			z := startZsh(t, zsh, zshOpts{rc: tt.rc})
+			z.Run("bindkey -M emacs '"+tt.key+"'", tt.want)
+		})
+	}
+	t.Run("no pre-redraw", func(t *testing.T) {
+		// A plugin that takes zle-line-pre-redraw over: the key, unbound
+		// while pending, is bound again for the next line.
+		z := startZsh(t, zsh, zshOpts{after: "_mine() {}; zle -N zle-line-pre-redraw _mine"})
+		z.Send("print -r -- gone\x18")
+		time.Sleep(time.Second) // past KEYTIMEOUT
+		z.Send("\x0b" + enter)  // Ctrl+X Ctrl+K: kill-buffer
+		z.ExpectPrompt()
+		z.Run("bindkey -M emacs '^X'", `"^X" ecdy-force-prefix`)
+	})
 }
 
 func TestAskDialog(t *testing.T) { forEachZsh(t, testAskDialog) }

@@ -7,7 +7,8 @@
 #   prompt → the buffer is rewritten to `ecdy ask -- '<prompt>'` and run, so the
 #            agent gets a regular foreground process (TTY, Ctrl+C, job control);
 #   ask    → a one-key dialog below the line; Enter sends the line to the agent.
-# Ctrl+X Enter (ECDY_FORCE_KEY) runs the line as a command without classification.
+# Ctrl+X Enter (ECDY_FORCE_KEY) runs the line as a command without classification;
+# its first key hides the indicator while ZLE waits for the rest.
 #
 # Fail-open (AGENTS.md, invariant 2): if the binary is missing, crashes, prints
 # garbage or misses the deadline, the line is accepted exactly like vanilla zsh.
@@ -378,6 +379,7 @@ _ecdy_exited() {
 }
 
 _ecdy_pre_redraw() {
+  _ecdy_pfx_rebind
   _ecdy_ind_on || return 0
   [[ $BUFFER == $_ecdy_ind_buf ]] && return 0
   emulate -L zsh
@@ -459,6 +461,10 @@ _ecdy_ind_reset() {
 }
 
 _ecdy_line_init() {
+  # The force key's first key, if no pre-redraw bound it again (another
+  # plugin took zle-line-pre-redraw over).
+  _ecdy_pfx_skip=0
+  _ecdy_pfx_rebind
   _ecdy_ind_reset || zle reset-prompt
   _ecdy_rps1_user=$RPS1 _ecdy_rps1_set=$RPS1
 }
@@ -504,6 +510,63 @@ fi
 _ecdy_force_command() {
   _ECDY_ORIG='' _ECDY_REWRITTEN=''
   _ecdy_accept
+}
+
+# The force key's first key, once pressed, takes the indicator away: the
+# line is about to run as a command. ZLE runs no widget while it waits for
+# the rest of a key sequence, unless the keys so far are bound themselves;
+# then it runs their widget after KEYTIMEOUT if no other key comes (zshzle,
+# "Keymaps"; Src/Zle/zle_keymap.c, getkeymapcmd). So the first key, where
+# nothing uses it on its own, runs _ecdy_force_prefix, which hides the
+# indicator and gives the key back to ZLE (`zle -U`) unbound: ZLE reads the
+# sequence and runs its widget exactly as without ecdy (a quick second key
+# never gets here). The key is bound again by the first pre-redraw after
+# that widget: the one right after this widget comes before ZLE reads the
+# key again (Src/Zle/zle_main.c, zlecore).
+typeset -g _ecdy_force_pfx=''  # the first key, in bindkey's notation
+typeset -g _ecdy_pfx_map=''    # the keymap it is unbound in, if it is
+typeset -gi _ecdy_pfx_skip=0   # 1: ZLE has yet to read it again
+
+_ecdy_force_prefix() {
+  emulate -L zsh
+  _ecdy_ind_cancel
+  _ecdy_ind_show ''
+  zle -R
+  # A numeric argument ends with a widget unless the widget is a prefix
+  # one, as argument-base is (zle_main.c, handleprefixes): pass it on.
+  if (( ${+NUMERIC} )); then
+    local n=$NUMERIC
+    zle .argument-base 10
+    zle .universal-argument $n
+  fi
+  _ecdy_pfx_map=$KEYMAP _ecdy_pfx_skip=1
+  bindkey -M $KEYMAP -r -- $_ecdy_force_pfx
+  zle -U -- $KEYS
+}
+
+# Bind the first key again, unless ZLE has yet to read it.
+_ecdy_pfx_rebind() {
+  [[ -n $_ecdy_pfx_map ]] || return 0
+  if (( _ecdy_pfx_skip )); then
+    _ecdy_pfx_skip=0
+    return 0
+  fi
+  bindkey -M $_ecdy_pfx_map -- $_ecdy_force_pfx ecdy-force-prefix
+  _ecdy_pfx_map=''
+  # The indicator comes back for whatever the line is now.
+  [[ $LASTWIDGET == ecdy-force-command ]] || _ecdy_ind_buf=''
+}
+
+# _ecdy_bind_force_prefix KEYMAP — bind the force key's first key in KEYMAP
+# if the force key has more than one and the first is free there.
+_ecdy_bind_force_prefix() {
+  emulate -L zsh
+  setopt nomultibyte
+  local keys=${(g:ce:)_ecdy_force_key} # bindkey's escapes, as raw bytes
+  (( $#keys > 1 )) || return 0
+  printf -v _ecdy_force_pfx '\\%03o' "'${keys[1]}"
+  [[ ${${(z)$(bindkey -M $1 -- $_ecdy_force_pfx)}[2]} == undefined-key ]] || return 0
+  bindkey -M $1 -- $_ecdy_force_pfx ecdy-force-prefix
 }
 
 # Record the line the user typed instead of the `ecdy ask -- ...` it became.
@@ -623,6 +686,9 @@ zle -N ecdy-force-command _ecdy_force_command
 typeset -g _ecdy_force_key=${ECDY_FORCE_KEY:-'^X^M'}
 bindkey -M emacs -- $_ecdy_force_key ecdy-force-command
 bindkey -M viins -- $_ecdy_force_key ecdy-force-command
+zle -N ecdy-force-prefix _ecdy_force_prefix
+_ecdy_bind_force_prefix emacs
+_ecdy_bind_force_prefix viins
 
 autoload -Uz add-zsh-hook add-zle-hook-widget
 add-zle-hook-widget line-finish _ecdy_line_finish
