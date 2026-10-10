@@ -350,9 +350,10 @@ _ecdy_ind_cancel() {
 # the line makes the write fail: what is left of the redraw stays in zsh's
 # output buffer until the next key (the blank line of _ecdy_stop). zsh
 # defers reaping inside a widget, so `kill -0` cannot tell: the child's
-# state (Z, a zombie) is read from /proc without forking. Without /proc,
-# a short nap is all it gets.
+# state is read from /proc without forking. Without /proc, a short nap is
+# all it gets.
 _ecdy_exited() {
+  emulate -L zsh
   [[ $1 == <-> ]] || return 0
   if [[ ! -r /proc/self/stat ]]; then
     _ecdy_nap
@@ -361,11 +362,17 @@ _ecdy_exited() {
   # A child that has closed its output exits within microseconds: check
   # without sleeping first, then every 10 ms.
   local st
+  local -a f
   integer i
   for (( i = 0; i < 110; i++ )); do
     # Gone: reaped already. (A failed redirection would print an error.)
     [[ -r /proc/$1/stat ]] && { IFS= read -r st </proc/$1/stat } 2>/dev/null || return 0
-    [[ ${st##*) } == [ZX]* ]] && return 0
+    f=(${=${st##*) }})
+    # A zombie (Z) whose other threads are still exiting: the kernel sends
+    # SIGCHLD when the last one is gone (Linux kernel/exit.c, release_task),
+    # and a Go program's main thread often exits first. f[18] is
+    # num_threads (proc_pid_stat(5), field 20).
+    [[ $f[1] == X || $f[1] == Z && $f[18] == 1 ]] && return 0
     (( i < 100 )) || _ecdy_nap || return 0
   done
 }

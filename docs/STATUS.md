@@ -28,6 +28,20 @@ Decisions: [ADR 0006](adr/0006-ux.md).
     inside a widget, so `kill -0` cannot tell; without `/proc` a 10 ms nap); a cancelled one too.
     `TestIndicatorSignals` (a classifier sending SIGCHLD until it exits, a 40 KB invisible prompt
     to make each redraw long): 6 of 20 blank before, 0 after.
+  - The same blank line came back on CI after the merge of f0281da
+    (`TestCompat/zsh-5.8.1/atuin/after`, run 38001895983; the PR run of the same tree was green).
+    Cause: `Z` in `/proc` does not mean SIGCHLD was sent. Linux sends it when the last thread of the
+    process is gone (kernel/exit.c, `release_task`), and `ecdy classify`'s main thread often exits
+    before its other threads: `Z` with `num_threads` > 1 in 0.3-15% of runs depending on the load
+    (6-39% on one CPU), SIGCHLD up to 3 ms later, i.e. during the redraw. zsh flushes the prompt of
+    `reset-prompt` separately (zle_refresh.c, `fflush(shout)` after `zputs(lpromptbuf)`), so the
+    signal failed the second write: the prompt, then nothing. Forced with a classifier whose main
+    thread exits while another holds the terminal's output (`tcflow`), stops zsh between its two
+    writes and sends SIGCHLD: the CI failure byte for byte, 4 of 4. `_ecdy_exited` now waits for `Z`
+    with one thread. f0281da (`--comments`) was not involved: its parent's binary has the same
+    rates. `TestIndicatorZombie` (that classifier, without the stop): red on every zsh before, green
+    after; `-race -count=20` of `TestCompat|TestIndicator` on the matrix and `taskset -c 0 -race
+    -count=3` green.
 - **Markdown** (`internal/render/markdown.go`), own streaming renderer, no dependency (glamour
   renders whole documents only). Headings, emphasis (CommonMark flanking rules), code spans,
   fenced code, bullet and task lists, quotes, rules, links, escapes; the rest as it is. Holds back

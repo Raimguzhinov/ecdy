@@ -25,6 +25,9 @@ func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && os.Args[1] == "fake-agent" {
 		fakeagent.Main()
 	}
+	if len(os.Args) > 1 && os.Args[1] == "zombie-classifier" {
+		zombieClassifier(os.Args[2:])
+	}
 	os.Exit(run(m))
 }
 
