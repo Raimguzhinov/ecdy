@@ -333,3 +333,32 @@ func testIndicatorSignals(t *testing.T, zsh string) {
 		z.Send(ctrlU)
 	}
 }
+
+// TestIndicatorZombie: a classifier that /proc shows as a zombie may still
+// have threads exiting, and its SIGCHLD comes when the last one is gone (a
+// Go program's main thread often exits first). zombieClassifier stretches
+// that time and makes zsh's writes wait in it, so that SIGCHLD hits them.
+func TestIndicatorZombie(t *testing.T) { forEachZsh(t, testIndicatorZombie) }
+
+func testIndicatorZombie(t *testing.T, zsh string) {
+	if !zombieSupported {
+		t.Skip("zombieClassifier needs Linux")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const line = "explain again"
+	dir := t.TempDir()
+	script := "#!/bin/sh\n[ \"$1\" = classify ] && eval 'last=${'$#'}' && [ \"$last\" = " + shellQuote(line) + " ] ||\n  exec " +
+		ecdyBin + " \"$@\"\nexec " + shellQuote(self) + " zombie-classifier " + ecdyBin + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "ecdy"), []byte(script), 0o755); err != nil { //nolint:gosec // a test executable
+		t.Fatal(err)
+	}
+	z := startZsh(t, zsh, zshOpts{after: "ECDY_BIN=" + filepath.Join(dir, "ecdy")})
+	for range 3 {
+		z.Send(line)
+		z.Expect("→ agent")
+		z.Send(ctrlU)
+	}
+}
