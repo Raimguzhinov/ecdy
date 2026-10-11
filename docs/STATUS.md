@@ -575,6 +575,11 @@ Decisions: [ADR 0006](adr/0006-ux.md).
 - **Force key is Ctrl+X Enter** (`^X^M`), configurable with `ECDY_FORCE_KEY` (bindkey notation,
   read when the plugin loads); Alt+Enter is no longer bound (zsh inserts a newline with it).
   `ecdy doctor` checks the configured key (probe `force-key=`/`force=`).
+- **`TestVersionMismatch` flake** (about 1 in 50, also before the waiting status line): the test's
+  fake old daemon closed the `stop` connection before its listener, so `ecdy ask` could dial the
+  dying listener and get `connection reset by peer`. The fake now stops listening before it
+  answers, as `daemon.Run` does. Forced with a pause between the two steps: the old order failed
+  10/10, the new one passed 20/20.
 
 ## Next: M8 — other shells
 
