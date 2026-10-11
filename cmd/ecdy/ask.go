@@ -58,6 +58,7 @@ func newAskCmd() *cobra.Command {
 }
 
 func runAsk(cmd *cobra.Command, agentName string, verbose bool, prompt string) error {
+	start := time.Now()
 	dir, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("current directory: %w", err)
@@ -70,7 +71,10 @@ func runAsk(cmd *cobra.Command, agentName string, verbose bool, prompt string) e
 	color := onTerm && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
 	r := render.New(stdout, render.Options{Color: color, Rewrite: onTerm, Verbose: verbose, Markdown: color, Width: termWidth(stdout), Spacing: onTerm})
 	defer r.Pad()
-	h := &askHandler{r: r, stderr: stderr, color: color}
+	h := &askHandler{r: r, stderr: stderr, color: color, agent: agentName, phased: make(chan struct{}, 1)}
+	if onTerm {
+		defer h.showWaiting(start, statusDelay())()
+	}
 
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
@@ -160,6 +164,10 @@ func runAsk(cmd *cobra.Command, agentName string, verbose bool, prompt string) e
 	}
 	switch stop {
 	case acp.StopReasonEndTurn:
+		if !h.replied() {
+			// gemini-cli ends a blocked or empty response this way.
+			r.Notice("%s returned an empty reply", h.agentName())
+		}
 		return nil
 	case acp.StopReasonCancelled:
 		r.Notice("cancelled")
@@ -217,13 +225,113 @@ type askHandler struct {
 	r      *render.Renderer
 	stderr io.Writer
 	color  bool
+
+	mu      sync.Mutex
+	agent   string       // the agent's name, once known
+	phase   daemon.Phase // "" until the daemon says
+	phased  chan struct{}
+	content bool // the agent sent text, a thought, a tool call or a plan
 }
 
-func (h *askHandler) Update(u acp.SessionUpdate) { h.r.Update(u) }
+func (h *askHandler) Update(u acp.SessionUpdate) {
+	if u.AgentMessageChunk != nil && u.AgentMessageChunk.Content.Text != nil && u.AgentMessageChunk.Content.Text.Text != "" ||
+		u.AgentThoughtChunk != nil || u.ToolCall != nil || u.ToolCallUpdate != nil || u.Plan != nil {
+		h.mu.Lock()
+		h.content = true
+		h.mu.Unlock()
+	}
+	h.r.Update(u)
+}
 
 func (h *askHandler) Notice(text string) { h.r.Notice("%s", text) }
 
-func (h *askHandler) Stderr(text string) { _, _ = io.WriteString(h.stderr, text) }
+func (h *askHandler) Stderr(text string) {
+	h.r.Hide()
+	_, _ = io.WriteString(h.stderr, text)
+}
+
+func (h *askHandler) Phase(p daemon.Phase, agent string) {
+	h.mu.Lock()
+	h.phase, h.agent = p, agent
+	h.mu.Unlock()
+	select {
+	case h.phased <- struct{}{}:
+	default:
+	}
+}
+
+func (h *askHandler) replied() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.content
+}
+
+func (h *askHandler) agentName() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.agent == "" {
+		return "the agent"
+	}
+	return h.agent
+}
+
+// defaultStatusDelay is how long `ecdy ask` stays silent before it says
+// what it waits for.
+const defaultStatusDelay = 2 * time.Second
+
+// statusDelay returns ECDY_STATUS_DELAY (a Go duration; for tests), or
+// defaultStatusDelay.
+func statusDelay() time.Duration {
+	d, err := time.ParseDuration(os.Getenv("ECDY_STATUS_DELAY"))
+	if err != nil || d < 0 {
+		return defaultStatusDelay
+	}
+	return d
+}
+
+// showWaiting draws a status line saying what the turn waits for, once
+// nothing has been shown for delay since start, redrawn every second and
+// when the phase changes, until anything else is shown. stop ends it and
+// erases the line.
+func (h *askHandler) showWaiting(start time.Time, delay time.Duration) (stop func()) {
+	done, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+		}
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for h.r.Status(h.waitingText(time.Since(start))) {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+			case <-h.phased:
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+		h.r.Finish()
+	}
+}
+
+func (h *askHandler) waitingText(elapsed time.Duration) string {
+	h.mu.Lock()
+	phase := h.phase
+	h.mu.Unlock()
+	what := "waiting for " + h.agentName()
+	if phase == daemon.PhaseStarting {
+		what = "starting " + h.agentName()
+	}
+	return fmt.Sprintf("%s… %ds · Ctrl+C to cancel", what, int(elapsed.Seconds()))
+}
 
 func (h *askHandler) Permission(ctx context.Context, req acp.RequestPermissionRequest) (acp.RequestPermissionOutcome, error) {
 	// One dialog at a time, and no agent output under it.

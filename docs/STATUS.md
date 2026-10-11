@@ -136,6 +136,22 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   (`share/zsh/site-functions/_ecdy` etc.), so the NixOS and Home Manager modules get them with
   the package; checked in `zsh -f` with the plugin loaded (`$_comps[ecdy]` is `_ecdy`).
 
+- **Agent status** (an unavailable model looked like a hang: nothing was printed while the agent
+  started or before its first update). `ecdy ask` on a terminal draws a dim, self-rewriting line
+  after 2 s of silence (`starting claude… 7s · Ctrl+C to cancel`, then `waiting for claude…`),
+  erased by the first output, dialog, notice or stderr and never drawn again in that turn; pipes
+  unchanged. The daemon sends a new `phase` message (`starting`/`waiting`, the agent's name) that
+  older clients ignore; the protocol version is unchanged. `ECDY_STATUS_DELAY` (a Go duration)
+  sets the delay for tests. Errors: auth_required at `initialize` and `session/prompt` is an
+  `AuthError` with the login hint (the agent is then dropped, so the next prompt starts it with the
+  new login); a request error is followed by the last 10 lines of the agent's stderr, redacted (so
+  is an exit's); the agent's stderr goes to `ecdy.log` line by line, redacted, cut at 1 KiB per
+  line; `-v` forwards it from the agent's start; an `end_turn` without any content prints
+  `<agent> returned an empty reply`. The status line is shown only before the first output: a
+  long silence mid-turn shows nothing yet. Every new test was seen red with its mutation (about 40
+  mutations, one at a time); the one survivor is the `onTerm` guard in `ecdy ask`, masked by the
+  renderer's own terminal check.
+
 ### Verified locally (2026-09-29)
 
 - `nix develop .#zsh-matrix -c go test -race ./...` — green (2:02); `golangci-lint run` — 0 issues;

@@ -121,7 +121,7 @@ links; tables and HTML as they are), and escape sequences in it are removed; pip
 agent's text as is. Tool calls appear as one status line each
 (`⚙ Read main.go ✓`, `$ go test ./... ✗`); `ecdy ask -v` also shows thoughts, plans, tool output (the
 last 20 lines of a command's output, with escape sequences and control characters removed; on a
-terminal the last 5 lines while the command runs) and the agent's stderr.
+terminal the last 5 lines while the command runs) and the agent's stderr, from its start.
 
 The agent reads files, edits them and runs commands with its own tools and asks for permission its own
 way; ecdy shows those requests but does not offer the agent its file system or terminal (ACP's `fs/*`
@@ -160,7 +160,17 @@ command = ["claude-agent-acp"]   # installed globally instead of npx
 ```
 
 ecdy uses the agent's own login: log in with the agent's CLI first (`claude`, `codex login`, …).
-If the agent reports that it needs authentication, `ecdy ask` says so and exits.
+If the agent reports that it needs authentication (at start or later, when a login expires),
+`ecdy ask` says so and exits; the next prompt starts the agent afresh.
+
+**Waiting and errors.** On a terminal, if nothing has been shown 2 seconds after Enter, a dim line
+says what ecdy waits for, counting the seconds: `starting claude… 7s · Ctrl+C to cancel` while the
+agent starts (an `npx` download, a slow login check), `waiting for claude… 12s · Ctrl+C to cancel`
+once the prompt is sent. The reply, a dialog or a notice replaces it; piped output never has it.
+When the agent fails, the error is followed by the last 10 lines of its stderr (secrets redacted as
+in the session context below); a turn that ends without any content prints
+`claude returned an empty reply`. With `ECDY_LOG` set, every line of the agent's stderr goes to the
+log, redacted.
 
 **Permissions.** Every permission request of the agent is shown under the reply:
 

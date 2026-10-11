@@ -165,12 +165,16 @@ type PromptRequest struct {
 	Verbose bool
 }
 
-// TurnHandler shows a turn to the user. Update, Notice and Stderr are called
-// in the order the server sent them, never concurrently with each other.
+// TurnHandler shows a turn to the user. Update, Notice, Stderr and Phase are
+// called in the order the server sent them, never concurrently with each
+// other.
 type TurnHandler interface {
 	Update(u acp.SessionUpdate)
 	Notice(text string)
 	Stderr(text string)
+	// Phase reports what the turn waits for, and the agent's name. A daemon
+	// of an older ecdy does not send it.
+	Phase(p Phase, agent string)
 	// Permission asks the user; it runs on its own goroutine, after every
 	// update sent before the request was handled. ctx is cancelled when
 	// the request is withdrawn or the turn ends. Returning ErrInterrupted
@@ -287,6 +291,8 @@ func (t *Turn) dispatch() {
 			t.h.Notice(m.Text)
 		case tStderr:
 			t.h.Stderr(m.Text)
+		case tPhase:
+			t.h.Phase(Phase(m.Text), m.Agent)
 		case tPermission:
 			if m.Permission != nil {
 				t.openDialog(m.ID, *m.Permission)
