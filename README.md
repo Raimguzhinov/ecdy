@@ -72,10 +72,14 @@ runs it.
 
 **Indicator.** While you type, the right prompt shows what Enter will do: `→ agent` for a prompt,
 `? ask` when a dialog will ask, nothing for a command. The classifier runs in the background on every
-change of the line, so typing never waits for it; Enter still classifies the line itself.
+change of the line, so typing never waits for it; Enter still classifies the line itself. After
+the first key of the force key (Ctrl+X) the indicator goes away, as the line is about to run as a
+command: once ZLE has waited `KEYTIMEOUT` (0.4 s by default) for the next key. Any other key after
+it does what it does without ecdy (`^X^E`, say), and the indicator comes back.
 
 The plugin replaces the `accept-line` widget (calling the previous one, if another plugin wrapped
-it), binds the force key (`^X^M` by default) in the `emacs` and `viins` keymaps, adds `zle-line-init`,
+it), binds the force key (`^X^M` by default) in the `emacs` and `viins` keymaps (and its first key,
+when it has more than one and nothing else uses that key alone), adds `zle-line-init`,
 `zle-line-pre-redraw` and `zle-line-finish` hooks (with `add-zle-hook-widget`) and defines a
 function `ecdy` in front of the binary, so that `ecdy doctor` can check the shell. Settings:
 
