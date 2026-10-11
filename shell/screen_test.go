@@ -362,3 +362,62 @@ func testIndicatorZombie(t *testing.T, zsh string) {
 		z.Send(ctrlU)
 	}
 }
+
+// TestIndicatorForceKey: once the first key of the force key is pressed and
+// ZLE waits for the next one, the indicator goes away, as the line is about
+// to run as a command. Any other key after it works as without ecdy, and
+// the indicator comes back.
+func TestIndicatorForceKey(t *testing.T) { forEachZsh(t, testIndicatorForceKey) }
+
+func testIndicatorForceKey(t *testing.T, zsh string) {
+	// A widget on Ctrl+X Ctrl+E that shows how ZLE called it.
+	const probe = `_probe() { BUFFER+=" [${(V)KEYS} $WIDGET ${NUMERIC:-0}]" }; zle -N probe _probe; ` +
+		`bindkey -M emacs '^X^E' probe; bindkey -M viins '^X^E' probe`
+	for _, keymap := range []string{"emacs", "viins"} {
+		t.Run(keymap, func(t *testing.T) {
+			s := startScreen(t, zsh, zshOpts{rc: "RPS1=R; bindkey -" + keymap[:1] + "; " + probe}, 80)
+			s.typeText("explain this error")
+			s.waitRow("% explain this error → agent R")
+			s.run("send-keys", "C-x")
+			s.waitRow("% explain this error R")
+			s.run("send-keys", "C-e")
+			s.waitRow("% explain this error [^X^E probe 0] → agent R")
+			// A sequence bound to nothing leaves the line as it was.
+			s.run("send-keys", "C-x")
+			s.waitRow("% explain this error [^X^E probe 0] R")
+			s.run("send-keys", "C-z")
+			s.waitRow("% explain this error [^X^E probe 0] → agent R")
+			if keymap == "emacs" {
+				// A numeric argument reaches the widget.
+				s.run("send-keys", "M-3", "C-x")
+				s.waitRow("% explain this error [^X^E probe 0] R")
+				s.run("send-keys", "C-e")
+				s.waitRow("% explain this error [^X^E probe 0] [^X^E probe 3] → agent R")
+			}
+			// Ctrl+C while the key is pending drops the line; on the next
+			// line the key hides the indicator again.
+			s.run("send-keys", "C-x")
+			s.waitRow("] R")
+			s.run("send-keys", "C-c")
+			s.waitRow("% R")
+			s.run("send-keys", "C-l")
+			s.typeText("explain that")
+			s.waitRow("% explain that → agent R")
+			s.run("send-keys", "C-x")
+			s.waitRow("% explain that R")
+			s.run("send-keys", "Enter")
+			s.wait("command not found: explain")
+			s.waitRow("% R")
+		})
+	}
+	t.Run("custom", func(t *testing.T) {
+		s := startScreen(t, zsh, zshOpts{rc: "RPS1=R; ECDY_FORCE_KEY='^Xf'"}, 80)
+		s.typeText("explain this error")
+		s.waitRow("% explain this error → agent R")
+		s.run("send-keys", "C-x")
+		s.waitRow("% explain this error R")
+		s.typeText("f")
+		s.wait("command not found: explain")
+		s.waitRow("% R")
+	})
+}

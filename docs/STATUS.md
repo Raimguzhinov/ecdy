@@ -42,6 +42,22 @@ Decisions: [ADR 0006](adr/0006-ux.md).
     rates. `TestIndicatorZombie` (that classifier, without the stop): red on every zsh before, green
     after; `-race -count=20` of `TestCompat|TestIndicator` on the matrix and `taskset -c 0 -race
     -count=3` green.
+- **Force key hides the indicator.** With a multi-key `ECDY_FORCE_KEY` (default `^X^M`), its first
+  key, where nothing uses it alone, is bound to `ecdy-force-prefix`. ZLE runs no widget while a
+  sequence is pending unless the keys so far are bound, and then only after `KEYTIMEOUT`; so after
+  that pause the widget hides the indicator, unbinds the key and gives it back with `zle -U`, and
+  ZLE reads the whole sequence itself (KEYS, WIDGET, LASTWIDGET, kill/yank flags, string bindings,
+  longer sequences as without ecdy; a numeric argument is passed on with `argument-base` +
+  `universal-argument`). The key is bound again by the second pre-redraw after it (the first one
+  comes before ZLE reads the key again, zlecore), or by `zle-line-init`. Rejected: `read-command`
+  + `zle $REPLY` (the widget would see ecdy's WIDGET/LASTWIDGET and lose kill/yank flags); a
+  temporary keymap (`zle -K` runs `zle-keymap-select` twice, which zsh-vi-mode and themes act on);
+  moving the `^X` bindings out of the keymap to avoid `KEYTIMEOUT` (rewrites the user's keymaps).
+  Tests: `TestIndicatorForceKey` (emacs, viins, `^Xf`: hidden after Ctrl+X, Ctrl+X Ctrl+E with
+  vanilla KEYS/WIDGET/NUMERIC, an unbound `^X^Z`, Ctrl+C while pending), `TestForcePrefix`
+  (bound only when free, `\C-x` notation, a single key, a plugin taking `zle-line-pre-redraw`
+  over); each red before the feature and under its mutation. One survivor: not skipping the
+  classifier restart after the force key itself (speed only: a classifier started and killed).
 - **Markdown** (`internal/render/markdown.go`), own streaming renderer, no dependency (glamour
   renders whole documents only). Headings, emphasis (CommonMark flanking rules), code spans,
   fenced code, bullet and task lists, quotes, rules, links, escapes; the rest as it is. Holds back
@@ -143,6 +159,9 @@ Decisions: [ADR 0006](adr/0006-ux.md).
   rest of the line blank until the next key: that is zsh's behaviour, not ecdy's; the plugin only
   keeps its own children out of its redraws.
 - zsh hides RPROMPT when the line reaches it: no indicator on long lines.
+- The force key hides the indicator only after `KEYTIMEOUT` (a quick Enter accepts first). In viins,
+  a vi change that included the first key pending that long records it twice (`zle -U` input is
+  recorded again), so `.` may replay it differently.
 - `zle reset-prompt` re-expands the user's prompt at each verdict change (costly with slow prompts;
   `ECDY_INDICATOR=off` or `var`).
 - A line dropped by Ctrl+C keeps its indicator on the screen (zsh runs no hook for it).
