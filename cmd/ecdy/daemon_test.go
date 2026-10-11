@@ -423,8 +423,11 @@ func TestVersionMismatch(t *testing.T) {
 			_ = json.Unmarshal([]byte(line), &m)
 			reqs = append(reqs, m.T)
 			if m.T == "stop" {
-				_ = c.Close()
+				// Like daemon.Run: stop listening before answering, so the
+				// client's next dial cannot reach this listener.
 				_ = l.Close() // removes the socket
+				_, _ = c.Write([]byte(`{"t":"ok"}` + "\n"))
+				_ = c.Close()
 				return
 			}
 			_, _ = c.Write([]byte(`{"t":"error","code":"version","text":"old daemon"}` + "\n"))
