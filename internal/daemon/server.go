@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/Raimguzhinov/ecdy/internal/acpclient"
 	"github.com/Raimguzhinov/ecdy/internal/config"
+	"github.com/Raimguzhinov/ecdy/internal/sessionlog"
 )
 
 // Options configure a Server.
@@ -173,7 +175,12 @@ type agent struct {
 	cwd    string          // of the current ACP session
 	gen    int             // State.Generation the session was started for
 	turn   *turn           // the turn in progress, if any
+	errTo  *turn           // the turn the agent's stderr goes to, from its start
 	closed bool            // by Server.Close
+
+	errMu   sync.Mutex
+	errLine []byte // the agent's stderr line being logged
+	errSkip bool   // the rest of the line is dropped: it is too long
 }
 
 func (s *Server) acquire(name string) (*agent, error) {
@@ -289,8 +296,12 @@ func (s *Server) prompt(w *wire, m Msg) {
 	endErr := func(err error) { end(Msg{T: tError, Text: describe(name, err)}) }
 	go s.readClient(w, t, a, cancel, ended)
 
+	// The agent's stderr goes to a verbose client from the start: an agent
+	// that cannot start often says why only there.
+	a.setStderrTurn(t)
 	conn, fresh, err := a.ensure(ctx, t, spec, m.Cwd, state.Generation)
 	if err != nil {
+		a.setStderrTurn(nil)
 		endErr(err)
 		return
 	}
@@ -308,12 +319,19 @@ func (s *Server) prompt(w *wire, m Msg) {
 			texts = []string{block, m.Prompt}
 		}
 	}
+	t.phase(PhaseWaiting, name)
 	a.setTurn(t)
 	stop, err := conn.Prompt(ctx, texts...)
 	a.setTurn(nil)
+	a.setStderrTurn(nil)
 	if err != nil {
-		var ee *acpclient.ExitError
-		if errors.As(err, &ee) {
+		var (
+			ee *acpclient.ExitError
+			ae *acpclient.AuthError
+		)
+		// After an auth error the agent may keep its old credentials: the
+		// next prompt starts it afresh, after the user has logged in.
+		if errors.As(err, &ee) || errors.As(err, &ae) {
 			a.drop(conn)
 		}
 		endErr(err)
@@ -374,6 +392,7 @@ func (a *agent) ensure(ctx context.Context, t *turn, spec config.Agent, cwd stri
 		}
 	}
 	if conn == nil {
+		t.phase(PhaseStarting, a.name)
 		s := a.s
 		c, err := acpclient.Start(ctx, acpclient.Options{
 			Command:       spec.Command,
@@ -398,6 +417,7 @@ func (a *agent) ensure(ctx context.Context, t *turn, spec config.Agent, cwd stri
 		return c, true, nil
 	}
 	if a.gen != gen {
+		t.phase(PhaseStarting, a.name)
 		if err := conn.NewSession(ctx, cwd); err != nil {
 			var ee *acpclient.ExitError
 			if errors.As(err, &ee) {
@@ -477,12 +497,66 @@ func (a *agent) RequestPermission(ctx context.Context, req acp.RequestPermission
 	return t.permission(ctx, req)
 }
 
-// Write receives the agent's stderr: it goes to the client of a verbose turn.
+func (a *agent) setStderrTurn(t *turn) {
+	a.mu.Lock()
+	a.errTo = t
+	a.mu.Unlock()
+}
+
+// Write receives the agent's stderr: it goes to the log, and to the client
+// of a verbose turn.
 func (a *agent) Write(p []byte) (int, error) {
-	if t := a.currentTurn(); t != nil && t.verbose {
+	a.logStderr(p)
+	a.mu.Lock()
+	t := a.errTo
+	a.mu.Unlock()
+	if t != nil && t.verbose {
 		_ = t.w.send(Msg{T: tStderr, Text: string(p)})
 	}
 	return len(p), nil
+}
+
+// maxStderrLine bounds a line of the agent's stderr in the log.
+const maxStderrLine = 1024
+
+// logStderr logs each line of the agent's stderr, redacted (AGENTS.md,
+// section 2, invariant 4), cut to maxStderrLine bytes.
+func (a *agent) logStderr(p []byte) {
+	if !a.s.log.Enabled(context.Background(), slog.LevelInfo) {
+		return
+	}
+	a.errMu.Lock()
+	defer a.errMu.Unlock()
+	for len(p) > 0 {
+		chunk, rest, eol := bytes.Cut(p, []byte{'\n'})
+		if !a.errSkip {
+			if room := maxStderrLine - len(a.errLine); len(chunk) > room {
+				a.errLine = append(a.errLine, chunk[:room]...)
+				a.logLine(true)
+				a.errSkip = true
+			} else {
+				a.errLine = append(a.errLine, chunk...)
+			}
+		}
+		if !eol {
+			return
+		}
+		if !a.errSkip {
+			a.logLine(false)
+		}
+		a.errSkip = false
+		p = rest
+	}
+}
+
+func (a *agent) logLine(cut bool) {
+	line := sessionlog.Redact(strings.ToValidUTF8(string(a.errLine), "\uFFFD"))
+	a.errLine = a.errLine[:0]
+	if cut {
+		a.s.log.Info("agent stderr", "agent", a.name, "line", line, "cut", true)
+		return
+	}
+	a.s.log.Info("agent stderr", "agent", a.name, "line", line)
 }
 
 // turn is one prompt of one client.
@@ -501,6 +575,10 @@ type turn struct {
 }
 
 func (t *turn) notice(text string) { _ = t.w.send(Msg{T: tNotice, Text: text}) }
+
+func (t *turn) phase(p Phase, agent string) {
+	_ = t.w.send(Msg{T: tPhase, Text: string(p), Agent: agent})
+}
 
 // permission forwards a permission request to the client and waits for its
 // answer. If ctx ends first (the turn was cancelled, the agent withdrew the
@@ -576,15 +654,26 @@ func describe(name string, err error) string {
 		// its own terminal UI; the agent's CLI does it better.
 		return fmt.Sprintf("%s: %v\n  log in with the agent's own CLI, then try again", name, ae)
 	}
-	var ee *acpclient.ExitError
-	if errors.As(err, &ee) {
-		msg := fmt.Sprintf("%s: %v", name, ee)
-		if tail := lastLines(ee.Stderr, 10); tail != "" {
-			msg += "\n  " + strings.ReplaceAll(tail, "\n", "\n  ")
-		}
-		return msg
+	var (
+		ee *acpclient.ExitError
+		re *acpclient.RequestError
+	)
+	switch {
+	case errors.As(err, &ee):
+		return withStderr(fmt.Sprintf("%s: %v", name, ee), ee.Stderr)
+	case errors.As(err, &re):
+		return withStderr(fmt.Sprintf("%s: %v", name, re), re.Stderr)
 	}
 	return fmt.Sprintf("%s: %v", name, err)
+}
+
+// withStderr appends the last lines of the agent's stderr to msg, indented
+// and redacted: the agent may print its own tokens.
+func withStderr(msg, stderr string) string {
+	if tail := lastLines(sessionlog.Redact(stderr), 10); tail != "" {
+		msg += "\n  " + strings.ReplaceAll(tail, "\n", "\n  ")
+	}
+	return msg
 }
 
 func lastLines(s string, n int) string {

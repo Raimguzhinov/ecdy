@@ -244,6 +244,9 @@ func (c *Conn) setup(ctx context.Context) error {
 		},
 	})
 	if err != nil {
+		if authRequired(err) {
+			return &AuthError{}
+		}
 		return c.connErr("initialize", err)
 	}
 	if init.ProtocolVersion != acp.ProtocolVersionNumber {
@@ -263,8 +266,7 @@ func (c *Conn) NewSession(ctx context.Context, dir string) error {
 	}
 	sess, err := c.conn.NewSession(ctx, acp.NewSessionRequest{Cwd: dir, McpServers: []acp.McpServer{}})
 	if err != nil {
-		var re *acp.RequestError
-		if errors.As(err, &re) && re.Code == acp.NewAuthRequired(nil).Code {
+		if authRequired(err) {
 			return &AuthError{Methods: c.authMethods}
 		}
 		return c.connErr("session/new", err)
@@ -361,9 +363,18 @@ func (c *Conn) Prompt(ctx context.Context, texts ...string) (acp.StopReason, err
 		r = <-done
 	}
 	if r.err != nil {
+		if authRequired(r.err) {
+			return "", &AuthError{Methods: c.authMethods}
+		}
 		return "", c.connErr("session/prompt", r.err)
 	}
 	return r.resp.StopReason, nil
+}
+
+// authRequired reports whether err is the agent's auth_required error.
+func authRequired(err error) bool {
+	var re *acp.RequestError
+	return errors.As(err, &re) && re.Code == acp.NewAuthRequired(nil).Code
 }
 
 // exitGrace is how long a failed request waits to see whether the agent is
@@ -382,7 +393,7 @@ func (c *Conn) connErr(method string, err error) error {
 		// The agent closed its output; it is exiting or useless.
 	case <-c.exited:
 	case <-grace.C:
-		return &RequestError{Method: method, Err: err}
+		return &RequestError{Method: method, Err: err, Stderr: c.stderr.String()}
 	}
 	c.signalGroup(syscall.SIGKILL)
 	<-c.exited
@@ -394,6 +405,7 @@ func (c *Conn) connErr(method string, err error) error {
 type RequestError struct {
 	Method string
 	Err    error
+	Stderr string // the tail of the agent's stderr
 }
 
 // Error formats a JSON-RPC error as "method: message: details" instead of

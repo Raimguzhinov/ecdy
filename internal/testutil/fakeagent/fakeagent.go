@@ -62,6 +62,14 @@ type Script struct {
 	// as pi-acp does with the banner it then sends as a message chunk (see
 	// Step.StartupInfo).
 	StartupInfo string `json:"startup_info,omitempty"`
+	// StartStderr is written to stderr when initialize arrives, before
+	// StartDelayMS.
+	StartStderr string `json:"start_stderr,omitempty"`
+	// StartDelayMS delays the answer to initialize, as a slow start (npx
+	// downloading the agent) would.
+	StartDelayMS int `json:"start_delay_ms,omitempty"`
+	// InitAuthRequired makes initialize fail with auth_required.
+	InitAuthRequired bool `json:"init_auth_required,omitempty"`
 	// Turn is played on every session/prompt.
 	Turn []Step `json:"turn"`
 }
@@ -117,6 +125,12 @@ type Step struct {
 	Exit *int `json:"exit,omitempty"`
 	// Stop ends the turn with this stop reason.
 	Stop string `json:"stop,omitempty"`
+	// Error fails session/prompt with an internal error whose data.details
+	// is this text.
+	Error string `json:"error,omitempty"`
+	// AuthRequired fails session/prompt with auth_required, as an agent
+	// whose login expired does.
+	AuthRequired bool `json:"auth_required,omitempty"`
 }
 
 // Tool describes a tool call.
@@ -285,6 +299,11 @@ func (a *agent) record(method string, params any) {
 
 func (a *agent) Initialize(_ context.Context, p acp.InitializeRequest) (acp.InitializeResponse, error) {
 	a.record(acp.AgentMethodInitialize, p)
+	_, _ = os.Stderr.WriteString(a.script.StartStderr)
+	time.Sleep(time.Duration(a.script.StartDelayMS) * time.Millisecond)
+	if a.script.InitAuthRequired {
+		return acp.InitializeResponse{}, acp.NewAuthRequired(nil)
+	}
 	v := acp.ProtocolVersion(acp.ProtocolVersionNumber)
 	if a.script.ProtocolVersion != 0 {
 		v = acp.ProtocolVersion(a.script.ProtocolVersion)
@@ -440,6 +459,10 @@ func (a *agent) Prompt(ctx context.Context, p acp.PromptRequest) (acp.PromptResp
 			os.Exit(*s.Exit)
 		case s.Stop != "":
 			return stop(acp.StopReason(s.Stop))
+		case s.Error != "":
+			return acp.PromptResponse{}, acp.NewInternalError(map[string]any{"details": s.Error})
+		case s.AuthRequired:
+			return acp.PromptResponse{}, acp.NewAuthRequired(nil)
 		}
 		if err != nil {
 			return acp.PromptResponse{}, err

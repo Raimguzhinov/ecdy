@@ -53,6 +53,9 @@ type Renderer struct {
 	// output are drawn under it.
 	lastLine string
 	live     int
+
+	status bool // a status line (Status) is drawn
+	other  bool // a dialog or something else used the terminal (Pause, Hide)
 }
 
 type tool struct {
@@ -95,6 +98,7 @@ func (r *Renderer) write(s string) {
 	if s == "" {
 		return
 	}
+	r.unstatus()
 	_, _ = io.WriteString(r.w, s)
 	r.col0 = strings.HasSuffix(s, "\n")
 	if t := strings.TrimRight(s, "\n"); t == "" {
@@ -336,15 +340,18 @@ func (r *Renderer) Notice(format string, args ...any) {
 // so that a dialog can use the terminal.
 func (r *Renderer) Pause() (resume func()) {
 	r.mu.Lock()
+	r.unstatus()
+	r.other = true
 	r.line()
 	r.mode, r.last = "", ""
 	return r.mu.Unlock
 }
 
-// Finish ends the last line.
+// Finish ends the last line and erases the status line.
 func (r *Renderer) Finish() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.unstatus()
 	r.line()
 }
 
@@ -353,9 +360,44 @@ func (r *Renderer) Finish() {
 func (r *Renderer) Pad() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.unstatus()
 	r.line()
 	if r.o.Spacing && r.block != "" && r.nl < 2 {
 		r.write("\n")
+	}
+}
+
+// Status draws text, dimmed, as a line that the next call redraws and any
+// other output erases first. It draws only on a terminal (Rewrite) and only
+// before anything else was shown; it reports whether it drew, so that the
+// caller can stop.
+func (r *Renderer) Status(text string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.o.Rewrite || r.block != "" || r.other || !r.col0 {
+		return false
+	}
+	if r.o.Width != nil {
+		text = fit(text, r.o.Width()-1)
+	}
+	_, _ = io.WriteString(r.w, "\r\x1b[2K"+r.style(dim, text))
+	r.status = true
+	return true
+}
+
+// Hide erases the status line, which is not drawn again: something else is
+// about to write to the terminal.
+func (r *Renderer) Hide() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.unstatus()
+	r.other = true
+}
+
+func (r *Renderer) unstatus() {
+	if r.status {
+		r.status = false
+		_, _ = io.WriteString(r.w, "\r\x1b[2K")
 	}
 }
 

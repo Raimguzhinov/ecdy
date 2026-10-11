@@ -568,6 +568,38 @@ func TestAuthRequired(t *testing.T) {
 	}
 }
 
+// auth_required is an AuthError at every request, not only session/new: an
+// agent whose login expired fails the prompt.
+func TestAuthRequiredLater(t *testing.T) {
+	e := newEnv(t, fakeagent.Script{InitAuthRequired: true})
+	_, err := acpclient.Start(t.Context(), e.opts, &recorder{})
+	var ae *acpclient.AuthError
+	if !errors.As(err, &ae) {
+		t.Fatalf("Start = %v, want AuthError", err)
+	}
+
+	e = newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{AuthRequired: true}}})
+	c := e.start(t, &recorder{})
+	if _, err := c.Prompt(t.Context(), "hi"); !errors.As(err, &ae) {
+		t.Fatalf("Prompt = %v, want AuthError", err)
+	}
+}
+
+// A request error carries the tail of the agent's stderr: agents explain
+// their errors there.
+func TestRequestErrorStderr(t *testing.T) {
+	e := newEnv(t, fakeagent.Script{Turn: []fakeagent.Step{{Stderr: "retry 3: 529 overloaded\n"}, {Error: "API Error"}}})
+	c := e.start(t, &recorder{})
+	_, err := c.Prompt(t.Context(), "hi")
+	var re *acpclient.RequestError
+	if !errors.As(err, &re) {
+		t.Fatalf("Prompt = %v, want RequestError", err)
+	}
+	if err.Error() != "session/prompt: Internal error: API Error" || re.Stderr != "retry 3: 529 overloaded\n" {
+		t.Errorf("error %q, stderr %q", err, re.Stderr)
+	}
+}
+
 func TestRequestErrorMessage(t *testing.T) {
 	tests := []struct {
 		err  error

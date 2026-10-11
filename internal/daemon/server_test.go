@@ -66,6 +66,7 @@ type handler struct {
 	mu     sync.Mutex
 	text   strings.Builder
 	events []string
+	phases []string
 	choose func(ctx context.Context) (acp.RequestPermissionOutcome, error)
 	asked  chan struct{} // gets a value when a dialog opens
 }
@@ -89,6 +90,22 @@ func (h *handler) Stderr(text string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, "stderr: "+text)
+}
+
+func (h *handler) Phase(p Phase, agent string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.phases = append(h.phases, fmt.Sprintf("%s %s after %d texts", p, agent, h.texts()))
+}
+
+func (h *handler) texts() int {
+	n := 0
+	for _, e := range h.events {
+		if e == "text" {
+			n++
+		}
+	}
+	return n
 }
 
 func (h *handler) Permission(ctx context.Context, _ acp.RequestPermissionRequest) (acp.RequestPermissionOutcome, error) {

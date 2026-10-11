@@ -40,9 +40,19 @@ const (
 	tWithdraw   = "withdraw"   // ID: the permission request is no longer needed
 	tStderr     = "stderr"     // Text: the agent's stderr (verbose turns)
 	tNotice     = "notice"     // Text: a line of ecdy's own
+	tPhase      = "phase"      // Text (a Phase), Agent: what the turn waits for; older clients ignore it
 	tDone       = "done"       // StopReason: the turn ended
 	tError      = "error"      // Code, Text: the request failed
 	tOK         = "ok"         // Status for status; nothing for stop
+)
+
+// Phase is what a turn waits for before the agent's first update.
+type Phase string
+
+// Phases.
+const (
+	PhaseStarting Phase = "starting" // the agent process, initialize, session/new
+	PhaseWaiting  Phase = "waiting"  // session/prompt was sent
 )
 
 // Error codes.
